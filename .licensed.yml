@@ -1,0 +1,14 @@
+sources:
+  npm: true
+
+allowed:
+  - mit
+  - isc
+  - apache-2.0
+  - bsd-2-clause
+  - bsd-3-clause
+  - cc0-1.0
+  - unlicense
+
+ignore:
+  - name: xcode-packages-update

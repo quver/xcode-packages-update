@@ -1,0 +1,27 @@
+name: Xcode Packages Update
+description: Resolves Xcode Swift Package Manager dependencies and reports what changed.
+
+inputs:
+  project_file:
+    description: Path to the .xcodeproj file
+    required: true
+  temporary_packages_dir_path:
+    description: Path to a temporary directory for cloned SPM sources
+    required: false
+    default: .spm-tmp
+
+outputs:
+  dependenciesChanged:
+    description: 'true if any package was added, removed or updated'
+  summary:
+    description: 'Human-readable list of added, removed and updated packages'
+
+branding:
+  icon: package
+  color: orange
+
+runs:
+  using: 'node24'
+  main: 'dist/main/index.js'
+  post: 'dist/post/index.js'
+  post-if: 'always()'

@@ -1,0 +1,34 @@
+bugfix:
+  - changed-files:
+    - any-glob-to-any-file: 'src/**'
+
+tests:
+  - changed-files:
+    - any-glob-to-any-file: 'tests/**'
+
+build:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'main.js'
+      - 'post.js'
+      - 'dist/**'
+
+dependencies:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'package.json'
+      - 'package-lock.json'
+
+documentation:
+  - changed-files:
+    - any-glob-to-any-file:
+      - '*.md'
+      - '.github/**'
+
+configuration:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'action.yml'
+      - '.eslintrc.json'
+      - '.prettierrc.json'
+      - '.licensed.yml'
