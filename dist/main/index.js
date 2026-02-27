@@ -20904,10 +20904,10 @@ async function run() {
   const tempDir = core.getInput("temporary_packages_dir_path");
   const packageResolved = `${projectFile}/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`;
   const currentPackage = path6.join(__dirname, "CurrentPackage.resolved");
+  fs3.rmSync(tempDir, { recursive: true, force: true });
   core.saveState("temp_dir", tempDir);
   core.saveState("current_package", currentPackage);
   fs3.copyFileSync(packageResolved, currentPackage);
-  fs3.rmSync(tempDir, { recursive: true, force: true });
   fs3.mkdirSync(tempDir, { recursive: true });
   await exec2.exec("xcodebuild", [
     "-resolvePackageDependencies",
