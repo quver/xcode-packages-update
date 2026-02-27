@@ -1,0 +1,33 @@
+{
+  "name": "xcode-packages-update",
+  "version": "1.0.0",
+  "description": "Resolves Xcode SPM dependencies and reports what changed",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "esbuild src/main.entry.ts --bundle --platform=node --format=esm --conditions=import --outfile=dist/main/index.js && esbuild src/post.entry.ts --bundle --platform=node --format=esm --conditions=import --outfile=dist/post/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format:check": "prettier --check .",
+    "format:write": "prettier --write .",
+    "all": "npm run format:write && npm run lint && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@actions/core": "^3.0.0",
+    "@actions/exec": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "esbuild": "^0.25.0",
+    "eslint": "^10.0.2",
+    "globals": "^17.3.0",
+    "prettier": "^3.8.1",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^4.0.18"
+  }
+}

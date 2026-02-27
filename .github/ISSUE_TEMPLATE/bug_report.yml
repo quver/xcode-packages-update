@@ -1,0 +1,43 @@
+name: Bug report
+description: Something isn't working as expected
+labels: [bug]
+body:
+  - type: input
+    id: xcode_version
+    attributes:
+      label: Xcode version
+      placeholder: e.g. 16.2
+    validations:
+      required: true
+
+  - type: input
+    id: action_version
+    attributes:
+      label: Action version
+      placeholder: e.g. v1.2.3
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected to happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: package_resolved
+    attributes:
+      label: Package.resolved snippet
+      description: Paste the relevant part of your Package.resolved file.
+      render: json
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Action log
+      description: Paste the full output from the failed action run.
+      render: text
+    validations:
+      required: true
