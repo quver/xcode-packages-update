@@ -1,34 +1,22 @@
-bugfix:
-  - changed-files:
-      - any-glob-to-any-file: 'src/**'
-
-tests:
-  - changed-files:
-      - any-glob-to-any-file: 'tests/**'
-
-build:
-  - changed-files:
-      - any-glob-to-any-file:
-          - 'main.js'
-          - 'post.js'
-          - 'dist/**'
-
 dependencies:
   - changed-files:
       - any-glob-to-any-file:
           - 'package.json'
           - 'package-lock.json'
 
+ci:
+  - changed-files:
+      - any-glob-to-any-file: '.github/**'
+
 documentation:
   - changed-files:
-      - any-glob-to-any-file:
-          - '*.md'
-          - '.github/**'
+      - any-glob-to-any-file: '*.md'
 
 configuration:
   - changed-files:
       - any-glob-to-any-file:
-          - 'action.yml'
-          - '.eslintrc.json'
+          - 'eslint.config.js'
           - '.prettierrc.json'
           - '.licensed.yml'
+          - 'tsconfig.json'
+          - 'vitest.config.ts'
