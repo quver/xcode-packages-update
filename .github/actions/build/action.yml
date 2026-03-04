@@ -1,0 +1,16 @@
+name: Build
+description: Install dependencies and bundle the action
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+      with:
+        node-version: '24'
+        cache: 'npm'
+
+    - run: npm ci
+      shell: bash
+
+    - run: npm run build
+      shell: bash
