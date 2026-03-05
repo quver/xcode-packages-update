@@ -19756,6 +19756,8 @@ async function run() {
   const before = getPackages(currentPackage);
   const after = getPackages(packageResolved);
   const { removed, added, updated } = comparePackages(before, after);
+  import_fs3.default.rmSync(tempDir, { recursive: true, force: true });
+  import_fs3.default.rmSync(currentPackage, { force: true });
   if (removed.length === 0 && added.length === 0 && updated.length === 0) {
     info("Dependencies up to date");
     setOutput("dependenciesChanged", "false");
