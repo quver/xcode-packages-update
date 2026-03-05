@@ -104,6 +104,8 @@ describe('main', () => {
         await run();
 
         expect(mockExec).toHaveBeenCalledWith('xcodebuild', [
+            '-project',
+            'MyApp.xcodeproj',
             '-resolvePackageDependencies',
             '-disablePackageRepositoryCache',
             '-clonedSourcePackagesDirPath',
