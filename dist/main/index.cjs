@@ -19743,7 +19743,7 @@ async function run() {
   import_fs3.default.rmSync(tempDir, { recursive: true, force: true });
   saveState("temp_dir", tempDir);
   saveState("current_package", currentPackage);
-  import_fs3.default.copyFileSync(packageResolved, currentPackage);
+  import_fs3.default.renameSync(packageResolved, currentPackage);
   import_fs3.default.mkdirSync(tempDir, { recursive: true });
   await exec("xcodebuild", [
     "-project",

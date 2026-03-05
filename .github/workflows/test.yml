@@ -76,8 +76,12 @@ jobs:
         run: |
           echo "dependenciesChanged=${DEPENDENCIES_CHANGED}"
           echo "summary=${SUMMARY}"
-          if [ -z "${DEPENDENCIES_CHANGED}" ]; then
-            echo "::error::Expected dependenciesChanged output to be set"
+          if [ "${DEPENDENCIES_CHANGED}" != "true" ]; then
+            echo "::error::Expected dependenciesChanged to be 'true', got '${DEPENDENCIES_CHANGED}'"
+            exit 1
+          fi
+          if [ -z "${SUMMARY}" ]; then
+            echo "::error::Expected summary to be non-empty"
             exit 1
           fi
 

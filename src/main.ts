@@ -16,7 +16,7 @@ export async function run(): Promise<void> {
     core.saveState('temp_dir', tempDir);
     core.saveState('current_package', currentPackage);
 
-    fs.copyFileSync(packageResolved, currentPackage);
+    fs.renameSync(packageResolved, currentPackage);
 
     fs.mkdirSync(tempDir, { recursive: true });
 
