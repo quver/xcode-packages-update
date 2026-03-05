@@ -85,6 +85,22 @@ jobs:
             exit 1
           fi
 
+      - name: Verify repo is clean except Package.resolved
+        run: |
+          CHANGED=$(git diff --name-only)
+          echo "Changed files: ${CHANGED}"
+          UNEXPECTED=$(echo "${CHANGED}" | grep -v -e 'Package.resolved' -e '^dist/' || true)
+          if [ -n "${UNEXPECTED}" ]; then
+            echo "::error::Unexpected changed files after action: ${UNEXPECTED}"
+            exit 1
+          fi
+          UNTRACKED=$(git ls-files --others --exclude-standard)
+          echo "Untracked files: ${UNTRACKED}"
+          if [ -n "${UNTRACKED}" ]; then
+            echo "::error::Unexpected untracked files after action: ${UNTRACKED}"
+            exit 1
+          fi
+
   lint:
     runs-on: ubuntu-latest
     permissions:

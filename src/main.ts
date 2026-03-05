@@ -33,6 +33,9 @@ export async function run(): Promise<void> {
     const after = getPackages(packageResolved);
     const { removed, added, updated } = comparePackages(before, after);
 
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(currentPackage, { force: true });
+
     if (removed.length === 0 && added.length === 0 && updated.length === 0) {
         core.info('Dependencies up to date');
         core.setOutput('dependenciesChanged', 'false');
