@@ -71,6 +71,18 @@ describe('main', () => {
         expect(mockRmSync).toHaveBeenCalledWith('.spm-tmp', { recursive: true, force: true });
     });
 
+    test('cleans up tempDir and currentPackage after resolve', async () => {
+        const run = await loadRun();
+        await run();
+
+        // tempDir cleaned at start (1st call) and after resolve (2nd call)
+        expect(mockRmSync).toHaveBeenCalledTimes(3);
+        expect(mockRmSync).toHaveBeenNthCalledWith(2, '.spm-tmp', { recursive: true, force: true });
+        expect(mockRmSync).toHaveBeenNthCalledWith(3, expect.stringContaining('CurrentPackage.resolved'), {
+            force: true
+        });
+    });
+
     test('saves state for temp_dir and current_package', async () => {
         const run = await loadRun();
         await run();
