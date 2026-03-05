@@ -8,7 +8,7 @@ let mockInfo: ReturnType<typeof vi.fn>;
 let mockSetFailed: ReturnType<typeof vi.fn>;
 let mockExec: ReturnType<typeof vi.fn>;
 let mockRmSync: ReturnType<typeof vi.fn>;
-let mockCopyFileSync: ReturnType<typeof vi.fn>;
+let mockRenameSync: ReturnType<typeof vi.fn>;
 let mockMkdirSync: ReturnType<typeof vi.fn>;
 let mockGetPackages: ReturnType<typeof vi.fn>;
 let mockComparePackages: ReturnType<typeof vi.fn>;
@@ -21,7 +21,7 @@ beforeEach(() => {
     mockSetFailed = vi.fn();
     mockExec = vi.fn().mockResolvedValue(0);
     mockRmSync = vi.fn();
-    mockCopyFileSync = vi.fn();
+    mockRenameSync = vi.fn();
     mockMkdirSync = vi.fn();
     mockGetPackages = vi.fn().mockReturnValue(new Map());
     mockComparePackages = vi.fn().mockReturnValue({ removed: [], added: [], updated: [] });
@@ -42,7 +42,7 @@ beforeEach(() => {
     vi.doMock('fs', () => ({
         default: {
             rmSync: mockRmSync,
-            copyFileSync: mockCopyFileSync,
+            renameSync: mockRenameSync,
             mkdirSync: mockMkdirSync
         }
     }));
@@ -82,11 +82,11 @@ describe('main', () => {
         );
     });
 
-    test('copies Package.resolved to currentPackage', async () => {
+    test('moves Package.resolved to currentPackage', async () => {
         const run = await loadRun();
         await run();
 
-        expect(mockCopyFileSync).toHaveBeenCalledWith(
+        expect(mockRenameSync).toHaveBeenCalledWith(
             'MyApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved',
             expect.stringContaining('CurrentPackage.resolved')
         );
@@ -104,6 +104,8 @@ describe('main', () => {
         await run();
 
         expect(mockExec).toHaveBeenCalledWith('xcodebuild', [
+            '-project',
+            'MyApp.xcodeproj',
             '-resolvePackageDependencies',
             '-disablePackageRepositoryCache',
             '-clonedSourcePackagesDirPath',

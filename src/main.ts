@@ -2,7 +2,6 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { getPackages, comparePackages } from './packages.js';
 
 export async function run(): Promise<void> {
@@ -10,18 +9,20 @@ export async function run(): Promise<void> {
     const tempDir = core.getInput('temporary_packages_dir_path');
 
     const packageResolved = `${projectFile}/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`;
-    const currentPackage = path.join(path.dirname(fileURLToPath(import.meta.url)), 'CurrentPackage.resolved');
+    const currentPackage = path.join(__dirname, 'CurrentPackage.resolved');
 
     fs.rmSync(tempDir, { recursive: true, force: true });
 
     core.saveState('temp_dir', tempDir);
     core.saveState('current_package', currentPackage);
 
-    fs.copyFileSync(packageResolved, currentPackage);
+    fs.renameSync(packageResolved, currentPackage);
 
     fs.mkdirSync(tempDir, { recursive: true });
 
     await exec.exec('xcodebuild', [
+        '-project',
+        projectFile,
         '-resolvePackageDependencies',
         '-disablePackageRepositoryCache',
         '-clonedSourcePackagesDirPath',
