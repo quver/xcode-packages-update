@@ -5,11 +5,14 @@ let mockGetInput: ReturnType<typeof vi.fn>;
 let mockSaveState: ReturnType<typeof vi.fn>;
 let mockSetOutput: ReturnType<typeof vi.fn>;
 let mockInfo: ReturnType<typeof vi.fn>;
+let mockWarning: ReturnType<typeof vi.fn>;
 let mockSetFailed: ReturnType<typeof vi.fn>;
 let mockExec: ReturnType<typeof vi.fn>;
 let mockRmSync: ReturnType<typeof vi.fn>;
 let mockRenameSync: ReturnType<typeof vi.fn>;
 let mockMkdirSync: ReturnType<typeof vi.fn>;
+let mockExistsSync: ReturnType<typeof vi.fn>;
+let mockReadFileSync: ReturnType<typeof vi.fn>;
 let mockGetPackages: ReturnType<typeof vi.fn>;
 let mockComparePackages: ReturnType<typeof vi.fn>;
 
@@ -18,11 +21,14 @@ beforeEach(() => {
     mockSaveState = vi.fn();
     mockSetOutput = vi.fn();
     mockInfo = vi.fn();
+    mockWarning = vi.fn();
     mockSetFailed = vi.fn();
     mockExec = vi.fn().mockResolvedValue(0);
     mockRmSync = vi.fn();
     mockRenameSync = vi.fn();
     mockMkdirSync = vi.fn();
+    mockExistsSync = vi.fn().mockReturnValue(true);
+    mockReadFileSync = vi.fn().mockReturnValue('');
     mockGetPackages = vi.fn().mockReturnValue(new Map());
     mockComparePackages = vi.fn().mockReturnValue({ removed: [], added: [], updated: [] });
     vi.resetModules();
@@ -32,6 +38,7 @@ beforeEach(() => {
         saveState: mockSaveState,
         setOutput: mockSetOutput,
         info: mockInfo,
+        warning: mockWarning,
         setFailed: mockSetFailed
     }));
 
@@ -43,7 +50,9 @@ beforeEach(() => {
         default: {
             rmSync: mockRmSync,
             renameSync: mockRenameSync,
-            mkdirSync: mockMkdirSync
+            mkdirSync: mockMkdirSync,
+            existsSync: mockExistsSync,
+            readFileSync: mockReadFileSync
         }
     }));
 
@@ -54,7 +63,8 @@ beforeEach(() => {
 
     mockGetInput.mockImplementation((name: string) => {
         if (name === 'project_file') return 'MyApp.xcodeproj';
-        return '.spm-tmp';
+        if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+        return '';
     });
 });
 
@@ -111,7 +121,7 @@ describe('main', () => {
         expect(mockMkdirSync).toHaveBeenCalledWith('.spm-tmp', { recursive: true });
     });
 
-    test('runs xcodebuild with correct arguments', async () => {
+    test('runs xcodebuild with correct arguments for project', async () => {
         const run = await loadRun();
         await run();
 
@@ -198,5 +208,162 @@ describe('main', () => {
 
         const run = await loadRun();
         await expect(run()).rejects.toThrow('xcodebuild failed');
+    });
+});
+
+describe('input validation', () => {
+    test('neither project_file nor workspace_file → throws', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            return '';
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow('Either project_file or workspace_file must be provided.');
+    });
+
+    test('both project_file and workspace_file → throws', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'workspace_file') return 'MyApp.xcworkspace';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            return '';
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow('Only one of project_file or workspace_file can be provided, not both.');
+    });
+
+    test('workspace_file without scheme → throws with helpful message', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'workspace_file') return 'MyApp.xcworkspace';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            return '';
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow('scheme is required when using workspace_file.');
+    });
+
+    test('scheme without workspace_file → warns and proceeds with project', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'scheme') return 'MyScheme';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockWarning).toHaveBeenCalledWith(
+            'scheme input is ignored when project_file is used without workspace_file.'
+        );
+        expect(mockExec).toHaveBeenCalledWith('xcodebuild', expect.arrayContaining(['-project', 'MyApp.xcodeproj']));
+    });
+
+    test('workspace_file with scheme not found → throws with shared scheme hint', async () => {
+        mockExistsSync.mockReturnValue(false);
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'workspace_file') return 'MyApp.xcworkspace';
+            if (name === 'scheme') return 'MyScheme';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            return '';
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow(
+            'Scheme "MyScheme" was not found in "MyApp.xcworkspace" or any referenced project.'
+        );
+        await expect(run()).rejects.toThrow('marked as shared in Xcode');
+    });
+
+    test('workspace_file with scheme not in workspace nor referenced projects → throws', async () => {
+        // contents.xcworkspacedata exists, project is referenced, but scheme not found in project either
+        mockExistsSync.mockImplementation((p: string) => {
+            if (p.endsWith('contents.xcworkspacedata')) return true;
+            return false;
+        });
+        mockReadFileSync.mockReturnValue('<FileRef location = "container:MyApp.xcodeproj"></FileRef>');
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'workspace_file') return 'MyApp.xcworkspace';
+            if (name === 'scheme') return 'MyScheme';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            return '';
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow(
+            'Scheme "MyScheme" was not found in "MyApp.xcworkspace" or any referenced project.'
+        );
+    });
+
+    test('workspace_file with scheme in referenced project → finds scheme and proceeds', async () => {
+        // workspace-level scheme not found, but contents.xcworkspacedata exists and references a project with the scheme
+        mockExistsSync.mockImplementation((p: string) => {
+            if (p.endsWith('MyApp.xcworkspace/xcshareddata/xcschemes/MyScheme.xcscheme')) return false;
+            if (p.endsWith('contents.xcworkspacedata')) return true;
+            if (p.endsWith('MyApp.xcodeproj/xcshareddata/xcschemes/MyScheme.xcscheme')) return true;
+            return true; // allow other fs.existsSync calls (e.g. nothing else expected)
+        });
+        mockReadFileSync.mockReturnValue('<FileRef location = "container:MyApp.xcodeproj"></FileRef>');
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'workspace_file') return 'MyApp.xcworkspace';
+            if (name === 'scheme') return 'MyScheme';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockExec).toHaveBeenCalledWith(
+            'xcodebuild',
+            expect.arrayContaining(['-workspace', 'MyApp.xcworkspace'])
+        );
+    });
+});
+
+describe('workspace support', () => {
+    beforeEach(() => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'workspace_file') return 'MyApp.xcworkspace';
+            if (name === 'scheme') return 'MyApp';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            return '';
+        });
+    });
+
+    test('runs xcodebuild with -workspace and -scheme', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockExec).toHaveBeenCalledWith('xcodebuild', [
+            '-workspace',
+            'MyApp.xcworkspace',
+            '-scheme',
+            'MyApp',
+            '-resolvePackageDependencies',
+            '-disablePackageRepositoryCache',
+            '-clonedSourcePackagesDirPath',
+            '.spm-tmp'
+        ]);
+    });
+
+    test('uses workspace Package.resolved path', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockRenameSync).toHaveBeenCalledWith(
+            'MyApp.xcworkspace/xcshareddata/swiftpm/Package.resolved',
+            expect.stringContaining('CurrentPackage.resolved')
+        );
+    });
+
+    test('validates scheme exists as shared scheme', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockExistsSync).toHaveBeenCalledWith('MyApp.xcworkspace/xcshareddata/xcschemes/MyApp.xcscheme');
     });
 });
