@@ -3,3 +3,4 @@ CurrentPackage.resolved
 .spm-tmp/
 coverage/
 reports/
+.DS_Store
