@@ -17,6 +17,8 @@ After running, the action exposes a `dependenciesChanged` output that you can us
 
 ## Usage
 
+### With an Xcode project
+
 ```yaml
 - name: Resolve dependencies
   id: resolution
@@ -34,12 +36,36 @@ After running, the action exposes a `dependenciesChanged` output that you can us
     body: ${{ steps.resolution.outputs.summary }}
 ```
 
+### With an Xcode workspace
+
+```yaml
+- name: Resolve dependencies
+  id: resolution
+  uses: Quver/xcode-packages-update@v1
+  with:
+    workspace_file: 'MyApp.xcworkspace'
+    scheme: 'MyApp'
+
+- name: Open pull request with updated Package.resolved
+  if: steps.resolution.outputs.dependenciesChanged == 'true'
+  uses: peter-evans/create-pull-request@v3
+  with:
+    branch: deps/spm-updates
+    commit-message: 'deps: update SPM packages'
+    title: 'deps: update SPM packages'
+    body: ${{ steps.resolution.outputs.summary }}
+```
+
+> **Note:** The scheme must be marked as shared in Xcode — _Product → Scheme → Manage Schemes → check "Shared"_.
+
 ## Inputs
 
-| Input                         | Required | Default    | Description                                |
-| ----------------------------- | -------- | ---------- | ------------------------------------------ |
-| `project_file`                | Yes      | —          | Path to the `.xcodeproj` file              |
-| `temporary_packages_dir_path` | No       | `.spm-tmp` | Temporary directory for cloned SPM sources |
+| Input                         | Required                      | Default    | Description                                                                   |
+| ----------------------------- | ----------------------------- | ---------- | ----------------------------------------------------------------------------- |
+| `project_file`                | Yes (if no `workspace_file`)  | —          | Path to the `.xcodeproj` file. Mutually exclusive with `workspace_file`.      |
+| `workspace_file`              | Yes (if no `project_file`)    | —          | Path to the `.xcworkspace` file. Mutually exclusive with `project_file`.      |
+| `scheme`                      | Yes (if `workspace_file` set) | —          | Xcode scheme to use. Required with `workspace_file`. Must be a shared scheme. |
+| `temporary_packages_dir_path` | No                            | `.spm-tmp` | Temporary directory for cloned SPM sources.                                   |
 
 ## Outputs
 

@@ -101,6 +101,58 @@ jobs:
             exit 1
           fi
 
+  integration-workspace:
+    needs: build
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: dist
+          path: dist/
+
+      - name: Run action with workspace
+        id: resolve
+        uses: ./
+        with:
+          workspace_file: tests/fixtures/TestWorkspce/TestWorkspace.xcworkspace
+          scheme: TestWorkspce
+
+      - name: Verify outputs
+        env:
+          DEPENDENCIES_CHANGED: ${{ steps.resolve.outputs.dependenciesChanged }}
+          SUMMARY: ${{ steps.resolve.outputs.summary }}
+        run: |
+          echo "dependenciesChanged=${DEPENDENCIES_CHANGED}"
+          echo "summary=${SUMMARY}"
+          if [ "${DEPENDENCIES_CHANGED}" != "true" ]; then
+            echo "::error::Expected dependenciesChanged to be 'true', got '${DEPENDENCIES_CHANGED}'"
+            exit 1
+          fi
+          if [ -z "${SUMMARY}" ]; then
+            echo "::error::Expected summary to be non-empty"
+            exit 1
+          fi
+
+      - name: Verify repo is clean except Package.resolved
+        run: |
+          CHANGED=$(git diff --name-only)
+          echo "Changed files: ${CHANGED}"
+          UNEXPECTED=$(echo "${CHANGED}" | grep -v -e 'Package.resolved' -e '^dist/' || true)
+          if [ -n "${UNEXPECTED}" ]; then
+            echo "::error::Unexpected changed files after action: ${UNEXPECTED}"
+            exit 1
+          fi
+          UNTRACKED=$(git ls-files --others --exclude-standard)
+          echo "Untracked files: ${UNTRACKED}"
+          if [ -n "${UNTRACKED}" ]; then
+            echo "::error::Unexpected untracked files after action: ${UNTRACKED}"
+            exit 1
+          fi
+
   lint:
     runs-on: ubuntu-latest
     permissions:

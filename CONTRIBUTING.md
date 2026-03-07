@@ -34,7 +34,7 @@ Commit both the source changes and the updated `dist/`.
 npm test
 ```
 
-Tests live in `tests/`. Add a test for every new behaviour in `src/packages.ts`.
+Tests live in `tests/`. Add a test for every new behaviour in `src/main.ts` and `src/packages.ts`.
 
 ## Commit messages
 

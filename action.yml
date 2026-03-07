@@ -3,8 +3,14 @@ description: Resolves Xcode Swift Package Manager dependencies and reports what 
 
 inputs:
   project_file:
-    description: Path to the .xcodeproj file
-    required: true
+    description: Path to the .xcodeproj file. Mutually exclusive with workspace_file.
+    required: false
+  workspace_file:
+    description: Path to the .xcworkspace file. Mutually exclusive with project_file. Requires scheme.
+    required: false
+  scheme:
+    description: Xcode scheme to use. Required when workspace_file is provided. Must be a shared scheme. Ignored when using project_file.
+    required: false
   temporary_packages_dir_path:
     description: Path to a temporary directory for cloned SPM sources
     required: false
