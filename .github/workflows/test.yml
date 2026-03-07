@@ -39,11 +39,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.head_ref }}
 
       - uses: ./.github/actions/build
+
+      - name: Commit updated dist to PR branch
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add dist/
+          git diff --staged --quiet || git commit -m "build: update dist" && git push
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
