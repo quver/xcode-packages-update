@@ -3,7 +3,7 @@
 
 # xcode-packages-update
 
-[![Build](https://github.com/quver/xcode-packages-update/actions/workflows/build.yml/badge.svg)](https://github.com/quver/xcode-packages-update/actions/workflows/build.yml)
+[![Build](https://github.com/quver/xcode-packages-update/actions/workflows/test.yml/badge.svg)](https://github.com/quver/xcode-packages-update/actions/workflows/test.yml)
 [![codecov](https://codecov.io/github/quver/xcode-packages-update/graph/badge.svg?token=90NQCWJ1ZQ)](https://codecov.io/github/quver/xcode-packages-update)
 [![GitHub release](https://img.shields.io/github/v/release/quver/xcode-packages-update)](https://github.com/quver/xcode-packages-update/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
