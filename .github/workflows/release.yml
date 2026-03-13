@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - name: Validate version format
         run: |
@@ -21,8 +22,6 @@ jobs:
           fi
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
@@ -38,57 +37,18 @@ jobs:
       - name: Bump version in package.json
         run: npm version ${{ inputs.version }} --no-git-tag-version
 
-      - name: Generate changelog
-        id: changelog
-        run: |
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-
-          if [ -n "$PREVIOUS_TAG" ]; then
-            COMMITS=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"%s" --no-merges)
-          else
-            COMMITS=$(git log --pretty=format:"%s" --no-merges)
-          fi
-
-          FEATURES=$(echo "$COMMITS" | grep "^feat" | sed 's/^feat[^:]*: /- /' || true)
-          FIXES=$(echo "$COMMITS" | grep "^fix" | sed 's/^fix[^:]*: /- /' || true)
-          PERF=$(echo "$COMMITS" | grep "^perf" | sed 's/^perf[^:]*: /- /' || true)
-          DEPS=$(echo "$COMMITS" | grep "^deps\|^chore(deps)" | sed 's/^[^:]*: /- /' || true)
-
-          CHANGELOG=""
-          [ -n "$FEATURES" ] && CHANGELOG="${CHANGELOG}## Features\n${FEATURES}\n\n"
-          [ -n "$FIXES" ] && CHANGELOG="${CHANGELOG}## Bug Fixes\n${FIXES}\n\n"
-          [ -n "$PERF" ] && CHANGELOG="${CHANGELOG}## Performance\n${PERF}\n\n"
-          [ -n "$DEPS" ] && CHANGELOG="${CHANGELOG}## Dependencies\n${DEPS}\n\n"
-
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          printf "%b" "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Commit and tag
+      - name: Push release branch and open pull request
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
+          git checkout -b release/v${{ inputs.version }}
           git add dist/ package.json
           git commit -m "release: v${{ inputs.version }}"
-          git tag v${{ inputs.version }}
-          git push origin main
-          git push origin v${{ inputs.version }}
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
-        with:
-          tag_name: v${{ inputs.version }}
-          name: v${{ inputs.version }}
-          body: ${{ steps.changelog.outputs.changelog }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update floating version tags
-        run: |
-          VERSION="${{ inputs.version }}"
-          MAJOR=$(echo $VERSION | cut -d. -f1)
-          MINOR=$(echo $VERSION | cut -d. -f2)
-
-          git tag -f v${MAJOR}
-          git tag -f v${MAJOR}.${MINOR}
-          git push -f origin v${MAJOR}
-          git push -f origin v${MAJOR}.${MINOR}
+          git push origin release/v${{ inputs.version }}
+          gh pr create \
+            --title "release: v${{ inputs.version }}" \
+            --body "Automated release PR for v${{ inputs.version }}. Merge to publish." \
+            --base main \
+            --head release/v${{ inputs.version }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

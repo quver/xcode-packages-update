@@ -1,0 +1,76 @@
+name: Publish
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  publish:
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          VERSION="${BRANCH#release/v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"%s" --no-merges)
+          else
+            COMMITS=$(git log --pretty=format:"%s" --no-merges)
+          fi
+
+          FEATURES=$(echo "$COMMITS" | grep "^feat" | sed 's/^feat[^:]*: /- /' || true)
+          FIXES=$(echo "$COMMITS" | grep "^fix" | sed 's/^fix[^:]*: /- /' || true)
+          PERF=$(echo "$COMMITS" | grep "^perf" | sed 's/^perf[^:]*: /- /' || true)
+          DEPS=$(echo "$COMMITS" | grep "^deps\|^chore(deps)" | sed 's/^[^:]*: /- /' || true)
+
+          CHANGELOG=""
+          [ -n "$FEATURES" ] && CHANGELOG="${CHANGELOG}## Features\n${FEATURES}\n\n"
+          [ -n "$FIXES" ] && CHANGELOG="${CHANGELOG}## Bug Fixes\n${FIXES}\n\n"
+          [ -n "$PERF" ] && CHANGELOG="${CHANGELOG}## Performance\n${PERF}\n\n"
+          [ -n "$DEPS" ] && CHANGELOG="${CHANGELOG}## Dependencies\n${DEPS}\n\n"
+
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          printf "%b" "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag v${{ steps.version.outputs.version }}
+          git push origin v${{ steps.version.outputs.version }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update floating version tags
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          MAJOR=$(echo $VERSION | cut -d. -f1)
+          MINOR=$(echo $VERSION | cut -d. -f2)
+
+          git tag -f v${MAJOR}
+          git tag -f v${MAJOR}.${MINOR}
+          git push -f origin v${MAJOR}
+          git push -f origin v${MAJOR}.${MINOR}
