@@ -15,12 +15,36 @@ inputs:
     description: Path to a temporary directory for cloned SPM sources
     required: false
     default: .spm-tmp
+  html_report_path:
+    description: >
+      Optional path where the HTML dependency report will be written.
+      The report lists every resolved package with its repository URL,
+      installed version, latest resolved version, dependency type, and change status.
+      Parent directories are created automatically.
+    required: false
+  sbom_path:
+    description: >
+      Optional path where the CycloneDX 1.6 JSON SBOM will be written.
+      Development packages are tagged with scope "excluded"; app packages with "required".
+      Parent directories are created automatically.
+    required: false
+  development_packages:
+    description: >
+      Newline- or comma-separated list of package identities that are development-only
+      (e.g. test frameworks, linting plugins). These are labelled "Development" in the HTML
+      report and given scope "excluded" in the SBOM.
+    required: false
+    default: ''
 
 outputs:
   dependenciesChanged:
     description: 'true if any package was added, removed or updated'
   summary:
     description: 'Human-readable list of added, removed and updated packages'
+  html_report_path:
+    description: 'Path to the generated HTML dependency report (only set when html_report_path input is provided)'
+  sbom_path:
+    description: 'Path to the generated CycloneDX SBOM (only set when sbom_path input is provided)'
 
 branding:
   icon: package

@@ -14,7 +14,12 @@ let mockMkdirSync: ReturnType<typeof vi.fn>;
 let mockExistsSync: ReturnType<typeof vi.fn>;
 let mockReadFileSync: ReturnType<typeof vi.fn>;
 let mockGetPackages: ReturnType<typeof vi.fn>;
+let mockGetPackagesWithInfo: ReturnType<typeof vi.fn>;
 let mockComparePackages: ReturnType<typeof vi.fn>;
+let mockGenerateHtmlReport: ReturnType<typeof vi.fn>;
+let mockGenerateSbom: ReturnType<typeof vi.fn>;
+let mockDetectDevPackages: ReturnType<typeof vi.fn>;
+let mockWriteFileSync: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
     mockGetInput = vi.fn();
@@ -30,7 +35,12 @@ beforeEach(() => {
     mockExistsSync = vi.fn().mockReturnValue(true);
     mockReadFileSync = vi.fn().mockReturnValue('');
     mockGetPackages = vi.fn().mockReturnValue(new Map());
+    mockGetPackagesWithInfo = vi.fn().mockReturnValue(new Map());
     mockComparePackages = vi.fn().mockReturnValue({ removed: [], added: [], updated: [] });
+    mockGenerateHtmlReport = vi.fn().mockReturnValue('<html></html>');
+    mockGenerateSbom = vi.fn().mockReturnValue('{}');
+    mockDetectDevPackages = vi.fn().mockReturnValue(new Set());
+    mockWriteFileSync = vi.fn();
     vi.resetModules();
 
     vi.doMock('@actions/core', () => ({
@@ -52,13 +62,18 @@ beforeEach(() => {
             renameSync: mockRenameSync,
             mkdirSync: mockMkdirSync,
             existsSync: mockExistsSync,
-            readFileSync: mockReadFileSync
+            readFileSync: mockReadFileSync,
+            writeFileSync: mockWriteFileSync
         }
     }));
 
     vi.doMock('../src/packages.js', () => ({
         getPackages: mockGetPackages,
-        comparePackages: mockComparePackages
+        getPackagesWithInfo: mockGetPackagesWithInfo,
+        comparePackages: mockComparePackages,
+        generateHtmlReport: mockGenerateHtmlReport,
+        generateSbom: mockGenerateSbom,
+        detectDevPackages: mockDetectDevPackages
     }));
 
     mockGetInput.mockImplementation((name: string) => {
@@ -365,5 +380,175 @@ describe('workspace support', () => {
         await run();
 
         expect(mockExistsSync).toHaveBeenCalledWith('MyApp.xcworkspace/xcshareddata/xcschemes/MyApp.xcscheme');
+    });
+});
+
+describe('html report generation', () => {
+    test('writes html report when html_report_path is set', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'reports/deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockGenerateHtmlReport).toHaveBeenCalled();
+        expect(mockWriteFileSync).toHaveBeenCalledWith(expect.stringContaining('deps.html'), '<html></html>', 'utf8');
+        expect(mockSetOutput).toHaveBeenCalledWith('html_report_path', 'reports/deps.html');
+    });
+
+    test('skips html report when html_report_path not set', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockGenerateHtmlReport).not.toHaveBeenCalled();
+        expect(mockSetOutput).not.toHaveBeenCalledWith('html_report_path', expect.anything());
+    });
+
+    test('passes development packages set to generateHtmlReport', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'deps.html';
+            if (name === 'development_packages') return 'swiftlintplugins,swift-snapshot-testing';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        const devArg = mockGenerateHtmlReport.mock.calls[0][3] as Set<string>;
+        expect(devArg).toBeInstanceOf(Set);
+        expect(devArg.has('swiftlintplugins')).toBe(true);
+        expect(devArg.has('swift-snapshot-testing')).toBe(true);
+    });
+});
+
+describe('sbom generation', () => {
+    test('writes sbom when sbom_path is set', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'sbom_path') return 'reports/sbom.json';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockGenerateSbom).toHaveBeenCalled();
+        expect(mockWriteFileSync).toHaveBeenCalledWith(expect.stringContaining('sbom.json'), '{}', 'utf8');
+        expect(mockSetOutput).toHaveBeenCalledWith('sbom_path', 'reports/sbom.json');
+    });
+
+    test('skips sbom when sbom_path not set', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockGenerateSbom).not.toHaveBeenCalled();
+        expect(mockSetOutput).not.toHaveBeenCalledWith('sbom_path', expect.anything());
+    });
+
+    test('passes development packages set to generateSbom', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'sbom_path') return 'sbom.json';
+            if (name === 'development_packages') return 'swiftlintplugins\nswift-snapshot-testing';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        const devArg = mockGenerateSbom.mock.calls[0][1] as Set<string>;
+        expect(devArg).toBeInstanceOf(Set);
+        expect(devArg.has('swiftlintplugins')).toBe(true);
+        expect(devArg.has('swift-snapshot-testing')).toBe(true);
+    });
+});
+
+describe('dev package auto-detection', () => {
+    test('calls detectDevPackages when development_packages input is empty', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockDetectDevPackages).toHaveBeenCalled();
+    });
+
+    test('does not call detectDevPackages when development_packages input is provided', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'deps.html';
+            if (name === 'development_packages') return 'pactswift,swiftlintplugins';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockDetectDevPackages).not.toHaveBeenCalled();
+    });
+
+    test('passes auto-detected dev packages to generateHtmlReport', async () => {
+        const detected = new Set(['pactswift']);
+        mockDetectDevPackages.mockReturnValue(detected);
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockGenerateHtmlReport.mock.calls[0][3]).toBe(detected);
+    });
+});
+
+describe('dev package auto-detection with workspace', () => {
+    beforeEach(() => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'workspace_file') return 'path/to/MyApp.xcworkspace';
+            if (name === 'scheme') return 'MyApp';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'deps.html';
+            return '';
+        });
+    });
+
+    test('calls detectDevPackages with workspace directory as project root', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockDetectDevPackages).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('path/to'));
+    });
+
+    test('does not call detectDevPackages when development_packages is provided', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'workspace_file') return 'path/to/MyApp.xcworkspace';
+            if (name === 'scheme') return 'MyApp';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'deps.html';
+            if (name === 'development_packages') return 'pactswift';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockDetectDevPackages).not.toHaveBeenCalled();
     });
 });
