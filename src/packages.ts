@@ -211,7 +211,10 @@ function findPbxprojFiles(rootDir: string): string[] {
     for (const entry of entries) {
         if (entry.isDirectory() && entry.name.endsWith('.xcodeproj')) {
             const candidate = path.join(rootDir, entry.name, 'project.pbxproj');
-            if (fs.existsSync(candidate)) results.push(candidate);
+            const pbxprojExists = fs.existsSync(candidate);
+            if (pbxprojExists) {
+                results.push(candidate);
+            }
         }
     }
     return results;

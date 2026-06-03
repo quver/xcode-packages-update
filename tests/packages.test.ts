@@ -101,6 +101,15 @@ describe('getPackages', () => {
 
         expect(result.size).toBe(0);
     });
+
+    test('returns empty map when pins field is absent', async () => {
+        mockReadFileSync.mockReturnValue(JSON.stringify({}));
+
+        const getPackages = await loadGetPackages();
+        const result = getPackages('Package.resolved');
+
+        expect(result.size).toBe(0);
+    });
 });
 
 describe('getPackagesWithInfo', () => {
@@ -143,6 +152,28 @@ describe('getPackagesWithInfo', () => {
 
         const getPackagesWithInfo = await loadGetPackagesWithInfo();
         expect((await getPackagesWithInfo('Package.resolved')).size).toBe(0);
+    });
+
+    test('uses empty string when location is missing', async () => {
+        mockReadFileSync.mockReturnValue(
+            JSON.stringify({ pins: [{ identity: 'pkg', state: { version: '1.0.0' } }] })
+        );
+
+        const getPackagesWithInfo = await loadGetPackagesWithInfo();
+        const result = getPackagesWithInfo('Package.resolved');
+
+        expect(result.get('pkg')?.url).toBe('');
+    });
+
+    test('returns empty string version when state has no version branch or revision', async () => {
+        mockReadFileSync.mockReturnValue(
+            JSON.stringify({ pins: [{ identity: 'pkg', location: 'https://github.com/org/pkg', state: {} }] })
+        );
+
+        const getPackagesWithInfo = await loadGetPackagesWithInfo();
+        const result = getPackagesWithInfo('Package.resolved');
+
+        expect(result.get('pkg')?.version).toBe('');
     });
 });
 
@@ -317,6 +348,16 @@ describe('generateHtmlReport', () => {
         expect(html).toContain('href="https://github.com/firebase/firebase-ios-sdk"');
     });
 
+    test('renders package name as plain text when url is empty', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+        const info = new Map([['no-url-pkg', makeInfo('1.0.0', '')]]);
+
+        const html = generateHtmlReport(info, info, { removed: [], added: [], updated: [] });
+
+        expect(html).toContain('no-url-pkg');
+        expect(html).not.toContain('href=');
+    });
+
     test('includes summary counts in meta section', async () => {
         const generateHtmlReport = await loadGenerateHtmlReport();
         const info = new Map([['firebase', makeInfo('12.0.0')]]);
@@ -412,6 +453,24 @@ describe('generateSbom', () => {
         const sbom = JSON.parse(generateSbom(new Map()));
 
         expect(sbom.components).toHaveLength(0);
+    });
+
+    test('omits externalReferences when url is empty', async () => {
+        const generateSbom = await loadGenerateSbom();
+        const info = new Map([['no-url-pkg', { version: '1.0.0', url: '' }]]);
+
+        const sbom = JSON.parse(generateSbom(info));
+
+        expect(sbom.components[0].externalReferences).toBeUndefined();
+    });
+
+    test('falls back to identity-only purl when url has too few path segments', async () => {
+        const generateSbom = await loadGenerateSbom();
+        const info = new Map([['mypkg', { version: '2.0.0', url: 'https://example.com/mypkg' }]]);
+
+        const sbom = JSON.parse(generateSbom(info));
+
+        expect(sbom.components[0].purl).toBe('pkg:swift/mypkg@2.0.0');
     });
 });
 
@@ -552,6 +611,60 @@ describe('detectDevPackages', () => {
         const result = detectDevPackages('Package.resolved', '.');
 
         expect(result.has('pactswift')).toBe(true);
+    });
+
+    test('skips excluded directory names during Package.swift scan', async () => {
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir) === '.') return [makeEntry('node_modules', true), makeEntry('Package.swift', false)];
+            return [];
+        });
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved')) return makeResolved('pactswift');
+            return `.testTarget(name: "T", dependencies: [.product(name: "PactSwift", package: "pactswift")])`;
+        });
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.has('pactswift')).toBe(true);
+    });
+
+    test('handles readdirSync error in subdirectory scan gracefully', async () => {
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir) === '.') return [makeEntry('Subdir', true)];
+            throw new Error('EPERM');
+        });
+        mockReadFileSync.mockReturnValue(makeResolved('firebase-ios-sdk'));
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.size).toBe(0);
+    });
+
+    test('handles readdirSync error at root gracefully', async () => {
+        mockReaddirSync.mockImplementation(() => {
+            throw new Error('EPERM');
+        });
+        mockReadFileSync.mockReturnValue(makeResolved('firebase-ios-sdk'));
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.size).toBe(0);
+    });
+
+    test('skips Package.swift that cannot be read', async () => {
+        mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved')) return makeResolved('pactswift');
+            throw new Error('EACCES');
+        });
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.size).toBe(0);
     });
 });
 
@@ -713,5 +826,97 @@ describe('detectXcodeDevPackages', () => {
         const { devRefs } = detectXcodeDevPackages('project.pbxproj');
 
         expect(devRefs.has('swiftlintplugins')).toBe(true);
+    });
+
+    test('ignores product dep without a remote package reference (local dep)', async () => {
+        const LOCAL_DEP_ID = 'FFFFFFFFFFFFFFFFFFFFFFFE';
+        const pbxproj = makePbxproj({
+            remoteRefs: [],
+            productDeps: [{ id: LOCAL_DEP_ID, product: 'LocalLib', pkgRefId: null }],
+            targets: [{ name: 'Futurum', depIds: [LOCAL_DEP_ID] }]
+        });
+        mockReadFileSync.mockReturnValue(pbxproj);
+
+        const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
+        const { devRefs, appRefs } = detectXcodeDevPackages('project.pbxproj');
+
+        expect(devRefs.size).toBe(0);
+        expect(appRefs.size).toBe(0);
+    });
+
+    test('ignores target dep id that has no matching product dependency', async () => {
+        const UNMAPPED_DEP_ID = 'FFFFFFFFFFFFFFFFFFFFFFFF';
+        const pbxproj = makePbxproj({
+            remoteRefs: [],
+            productDeps: [],
+            targets: [{ name: 'Futurum', depIds: [UNMAPPED_DEP_ID] }]
+        });
+        mockReadFileSync.mockReturnValue(pbxproj);
+
+        const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
+        const { devRefs, appRefs } = detectXcodeDevPackages('project.pbxproj');
+
+        expect(devRefs.size).toBe(0);
+        expect(appRefs.size).toBe(0);
+    });
+});
+
+describe('findPbxprojFiles existsSync true path', () => {
+    const makeEntry = (name: string, isDir: boolean): fs.Dirent =>
+        ({ name, isFile: () => !isDir, isDirectory: () => isDir }) as unknown as fs.Dirent;
+
+    test('includes pbxproj path in detectDevPackages when existsSync returns true', async () => {
+        const pbxproj = [
+            `AAAAAAAAAAAAAAAAAAAAAAAA /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */ = { repositoryURL = "https://github.com/pointfreeco/swift-snapshot-testing" }`,
+            `BBBBBBBBBBBBBBBBBBBBBBBB /* SnapshotTesting */ = {`,
+            `    isa = XCSwiftPackageProductDependency;`,
+            `    package = AAAAAAAAAAAAAAAAAAAAAAAA /* ref */;`,
+            `    productName = SnapshotTesting;`,
+            `}`,
+            `isa = PBXNativeTarget;`,
+            `    name = FuturumTests;`,
+            `    packageProductDependencies = (`,
+            `        BBBBBBBBBBBBBBBBBBBBBBBB /* dep */,`,
+            `    )`
+        ].join('\n');
+
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir) === '.') return [makeEntry('Futurum.xcodeproj', true)];
+            return [];
+        });
+        mockExistsSync.mockReturnValue(true);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved'))
+                return JSON.stringify({
+                    pins: [{ identity: 'swift-snapshot-testing', location: 'https://github.com/pointfreeco/swift-snapshot-testing', state: { version: '1.0.0' } }]
+                });
+            return pbxproj;
+        });
+
+        const { detectDevPackages } = await import('../src/packages.js');
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(mockExistsSync).toHaveBeenCalled();
+        expect(mockExistsSync).toHaveBeenCalledWith('Futurum.xcodeproj/project.pbxproj');
+        expect(result.has('swift-snapshot-testing')).toBe(true);
+    });
+
+    test('excludes xcodeproj whose pbxproj does not exist when existsSync returns false', async () => {
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir) === '.') return [makeEntry('Futurum.xcodeproj', true)];
+            return [];
+        });
+        mockExistsSync.mockReturnValue(false);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved'))
+                return JSON.stringify({ pins: [{ identity: 'firebase-ios-sdk', location: 'https://github.com/firebase/firebase-ios-sdk', state: { version: '1.0.0' } }] });
+            return '';
+        });
+
+        const { detectDevPackages } = await import('../src/packages.js');
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(mockExistsSync).toHaveBeenCalledWith('Futurum.xcodeproj/project.pbxproj');
+        expect(result.size).toBe(0);
     });
 });
