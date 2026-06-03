@@ -115,24 +115,24 @@ jobs:
 
 ## Inputs
 
-| Input | Required | Default | Description |
-|---|---|---|---|
-| `project_file` | Yes (if no `workspace_file`) | — | Path to the `.xcodeproj` file. Mutually exclusive with `workspace_file`. |
-| `workspace_file` | Yes (if no `project_file`) | — | Path to the `.xcworkspace` file. Mutually exclusive with `project_file`. |
-| `scheme` | Yes (if `workspace_file` set) | — | Xcode scheme to use. Required with `workspace_file`. Must be a shared scheme. |
-| `temporary_packages_dir_path` | No | `.spm-tmp` | Temporary directory for cloned SPM sources. |
-| `html_report_path` | No | — | Path where the HTML dependency report will be written. Parent directories are created automatically. |
-| `sbom_path` | No | — | Path where the CycloneDX 1.6 JSON SBOM will be written. Parent directories are created automatically. |
-| `development_packages` | No | — | Newline- or comma-separated list of package identities to treat as development-only. Overrides auto-detection when provided. |
+| Input                         | Required                      | Default    | Description                                                                                                                  |
+| ----------------------------- | ----------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `project_file`                | Yes (if no `workspace_file`)  | —          | Path to the `.xcodeproj` file. Mutually exclusive with `workspace_file`.                                                     |
+| `workspace_file`              | Yes (if no `project_file`)    | —          | Path to the `.xcworkspace` file. Mutually exclusive with `project_file`.                                                     |
+| `scheme`                      | Yes (if `workspace_file` set) | —          | Xcode scheme to use. Required with `workspace_file`. Must be a shared scheme.                                                |
+| `temporary_packages_dir_path` | No                            | `.spm-tmp` | Temporary directory for cloned SPM sources.                                                                                  |
+| `html_report_path`            | No                            | —          | Path where the HTML dependency report will be written. Parent directories are created automatically.                         |
+| `sbom_path`                   | No                            | —          | Path where the CycloneDX 1.6 JSON SBOM will be written. Parent directories are created automatically.                        |
+| `development_packages`        | No                            | —          | Newline- or comma-separated list of package identities to treat as development-only. Overrides auto-detection when provided. |
 
 ## Outputs
 
-| Output | Description |
-|---|---|
-| `dependenciesChanged` | `'true'` if any package was added, removed, or updated |
-| `summary` | Human-readable list of changes, suitable for a PR body |
-| `html_report_path` | Path to the generated HTML report (only set when `html_report_path` input is provided) |
-| `sbom_path` | Path to the generated CycloneDX SBOM (only set when `sbom_path` input is provided) |
+| Output                | Description                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------- |
+| `dependenciesChanged` | `'true'` if any package was added, removed, or updated                                 |
+| `summary`             | Human-readable list of changes, suitable for a PR body                                 |
+| `html_report_path`    | Path to the generated HTML report (only set when `html_report_path` input is provided) |
+| `sbom_path`           | Path to the generated CycloneDX SBOM (only set when `sbom_path` input is provided)     |
 
 ## HTML dependency report
 
@@ -167,20 +167,20 @@ The action scans two sources:
 
 **`Package.swift` files** (all modules in the project):
 
-| Condition | Classification |
-|---|---|
-| Package referenced in `.testTarget(...)` dependencies | Development |
-| Package referenced in `plugins: [.plugin(name:, package:)]` inside any target | Development |
-| Package referenced in `.target(...)` dependencies | App |
-| Package appears in both `.target` and `.testTarget` | App wins |
+| Condition                                                                     | Classification |
+| ----------------------------------------------------------------------------- | -------------- |
+| Package referenced in `.testTarget(...)` dependencies                         | Development    |
+| Package referenced in `plugins: [.plugin(name:, package:)]` inside any target | Development    |
+| Package referenced in `.target(...)` dependencies                             | App            |
+| Package appears in both `.target` and `.testTarget`                           | App wins       |
 
 **`project.pbxproj`** (Xcode-managed dependencies):
 
-| Condition | Classification |
-|---|---|
-| Product linked only to targets whose name ends with `Tests` | Development |
-| Package in project references but not linked to any non-test target (build-tool plugins, e.g. SwiftLintPlugins) | Development |
-| Product linked to at least one non-test target | App |
+| Condition                                                                                                       | Classification |
+| --------------------------------------------------------------------------------------------------------------- | -------------- |
+| Product linked only to targets whose name ends with `Tests`                                                     | Development    |
+| Package in project references but not linked to any non-test target (build-tool plugins, e.g. SwiftLintPlugins) | Development    |
+| Product linked to at least one non-test target                                                                  | App            |
 
 If a package is classified as App in either source, App wins.
 

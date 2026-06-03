@@ -154,13 +154,17 @@ export function detectXcodeDevPackages(pbxprojPath: string): { devRefs: Set<stri
 
     // XCRemoteSwiftPackageReference id → identity
     const remoteRefToIdentity = new Map<string, string>();
-    for (const m of content.matchAll(/(\w{24}) \/\* XCRemoteSwiftPackageReference "[^"]*" \*\/ = \{[^}]*repositoryURL = "([^"]+)"/g)) {
+    for (const m of content.matchAll(
+        /(\w{24}) \/\* XCRemoteSwiftPackageReference "[^"]*" \*\/ = \{[^}]*repositoryURL = "([^"]+)"/g
+    )) {
         remoteRefToIdentity.set(m[1], identityFromUrl(m[2]));
     }
 
     // XCSwiftPackageProductDependency id → identity (only for remote packages)
     const prodDepToIdentity = new Map<string, string>();
-    for (const m of content.matchAll(/(\w{24}) \/\* \S+ \*\/ = \{\s*isa = XCSwiftPackageProductDependency;\s*(?:package = (\w+) [^;]+;\s*)?productName = [^;]+;/g)) {
+    for (const m of content.matchAll(
+        /(\w{24}) \/\* \S+ \*\/ = \{\s*isa = XCSwiftPackageProductDependency;\s*(?:package = (\w+) [^;]+;\s*)?productName = [^;]+;/g
+    )) {
         const depId = m[1];
         const pkgRef = m[2];
         if (pkgRef && remoteRefToIdentity.has(pkgRef)) {
@@ -172,7 +176,9 @@ export function detectXcodeDevPackages(pbxprojPath: string): { devRefs: Set<stri
     const devRefs = new Set<string>();
     const appRefs = new Set<string>();
 
-    for (const m of content.matchAll(/isa = PBXNativeTarget;.*?name = ([^;]+);.*?packageProductDependencies = \(([^)]*)\)/gs)) {
+    for (const m of content.matchAll(
+        /isa = PBXNativeTarget;.*?name = ([^;]+);.*?packageProductDependencies = \(([^)]*)\)/gs
+    )) {
         const rawName = m[1].trim().replace(/^"|"$/g, '');
         const isTestTarget = rawName.endsWith('Tests');
         for (const depId of m[2].matchAll(/(\w{24})/g)) {
@@ -389,11 +395,7 @@ ${rows}
 }
 
 function escapeHtml(str: string): string {
-    return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ─── CycloneDX SBOM ──────────────────────────────────────────────────────────
@@ -402,7 +404,10 @@ function buildPurl(identity: string, version: string, url: string): string {
     try {
         const parsed = new URL(url);
         const host = parsed.hostname;
-        const pathParts = parsed.pathname.replace(/^\/|\.git$/g, '').split('/').filter(Boolean);
+        const pathParts = parsed.pathname
+            .replace(/^\/|\.git$/g, '')
+            .split('/')
+            .filter(Boolean);
         if (pathParts.length >= 2) {
             const namespace = [host, ...pathParts.slice(0, -1)].join('/');
             const name = pathParts[pathParts.length - 1];

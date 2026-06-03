@@ -2,7 +2,14 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import fs from 'fs';
 import path from 'path';
-import { getPackages, getPackagesWithInfo, comparePackages, generateHtmlReport, generateSbom, detectDevPackages } from './packages.js';
+import {
+    getPackages,
+    getPackagesWithInfo,
+    comparePackages,
+    generateHtmlReport,
+    generateSbom,
+    detectDevPackages
+} from './packages.js';
 
 function findSharedScheme(workspaceFile: string, scheme: string): string | null {
     const schemeFilename = `${scheme}.xcscheme`;

@@ -1,6 +1,12 @@
 import { vi, beforeEach, describe, test, expect } from 'vitest';
 import { comparePackages } from '../src/packages.js';
-import type { getPackages as GetPackagesFn, getPackagesWithInfo as GetPackagesWithInfoFn, generateHtmlReport as GenerateHtmlReportFn, generateSbom as GenerateSbomFn, detectXcodeDevPackages as DetectXcodeDevPackagesFn } from '../src/packages.js';
+import type {
+    getPackages as GetPackagesFn,
+    getPackagesWithInfo as GetPackagesWithInfoFn,
+    generateHtmlReport as GenerateHtmlReportFn,
+    generateSbom as GenerateSbomFn,
+    detectXcodeDevPackages as DetectXcodeDevPackagesFn
+} from '../src/packages.js';
 
 let mockReadFileSync: ReturnType<typeof vi.fn>;
 let mockReaddirSync: ReturnType<typeof vi.fn>;
@@ -75,7 +81,9 @@ describe('getPackages', () => {
     test('falls back to revision when version and branch are missing', async () => {
         mockReadFileSync.mockReturnValue(
             JSON.stringify({
-                pins: [{ identity: 'some-package', location: 'https://github.com/org/repo', state: { revision: 'abc123' } }]
+                pins: [
+                    { identity: 'some-package', location: 'https://github.com/org/repo', state: { revision: 'abc123' } }
+                ]
             })
         );
 
@@ -332,7 +340,9 @@ describe('generateHtmlReport', () => {
 describe('generateSbom', () => {
     test('produces valid CycloneDX JSON', async () => {
         const generateSbom = await loadGenerateSbom();
-        const info = new Map([['firebase', { version: '12.0.0', url: 'https://github.com/firebase/firebase-ios-sdk' }]]);
+        const info = new Map([
+            ['firebase', { version: '12.0.0', url: 'https://github.com/firebase/firebase-ios-sdk' }]
+        ]);
 
         const sbom = JSON.parse(generateSbom(info));
 
@@ -343,7 +353,9 @@ describe('generateSbom', () => {
 
     test('sets scope required for app packages', async () => {
         const generateSbom = await loadGenerateSbom();
-        const info = new Map([['firebase', { version: '12.0.0', url: 'https://github.com/firebase/firebase-ios-sdk' }]]);
+        const info = new Map([
+            ['firebase', { version: '12.0.0', url: 'https://github.com/firebase/firebase-ios-sdk' }]
+        ]);
 
         const sbom = JSON.parse(generateSbom(info));
 
@@ -374,9 +386,7 @@ describe('generateSbom', () => {
 
         const sbom = JSON.parse(generateSbom(info));
 
-        expect(sbom.components[0].purl).toBe(
-            'pkg:swift/github.com/firebase/firebase-ios-sdk@12.0.0'
-        );
+        expect(sbom.components[0].purl).toBe('pkg:swift/github.com/firebase/firebase-ios-sdk@12.0.0');
     });
 
     test('includes vcs externalReference for packages with url', async () => {
@@ -589,7 +599,13 @@ describe('detectXcodeDevPackages', () => {
 
     test('classifies package linked only to test target as development', async () => {
         const pbxproj = makePbxproj({
-            remoteRefs: [{ id: SNAPSHOT_REF_ID, name: 'swift-snapshot-testing', url: 'https://github.com/pointfreeco/swift-snapshot-testing' }],
+            remoteRefs: [
+                {
+                    id: SNAPSHOT_REF_ID,
+                    name: 'swift-snapshot-testing',
+                    url: 'https://github.com/pointfreeco/swift-snapshot-testing'
+                }
+            ],
             productDeps: [{ id: SNAPSHOT_DEP_ID, product: 'SnapshotTesting', pkgRefId: SNAPSHOT_REF_ID }],
             targets: [{ name: 'FuturumTests', depIds: [SNAPSHOT_DEP_ID] }]
         });
@@ -604,7 +620,13 @@ describe('detectXcodeDevPackages', () => {
 
     test('classifies project-level-only package (plugin) as development', async () => {
         const pbxproj = makePbxproj({
-            remoteRefs: [{ id: SWIFTLINT_REF_ID, name: 'SwiftLintPlugins', url: 'https://github.com/SimplyDanny/SwiftLintPlugins' }],
+            remoteRefs: [
+                {
+                    id: SWIFTLINT_REF_ID,
+                    name: 'SwiftLintPlugins',
+                    url: 'https://github.com/SimplyDanny/SwiftLintPlugins'
+                }
+            ],
             productDeps: [],
             targets: []
         });
@@ -619,7 +641,9 @@ describe('detectXcodeDevPackages', () => {
 
     test('classifies package linked to non-test target as app', async () => {
         const pbxproj = makePbxproj({
-            remoteRefs: [{ id: FIREBASE_REF_ID, name: 'firebase-ios-sdk', url: 'https://github.com/firebase/firebase-ios-sdk' }],
+            remoteRefs: [
+                { id: FIREBASE_REF_ID, name: 'firebase-ios-sdk', url: 'https://github.com/firebase/firebase-ios-sdk' }
+            ],
             productDeps: [{ id: FIREBASE_DEP_ID, product: 'Firebase', pkgRefId: FIREBASE_REF_ID }],
             targets: [{ name: 'Futurum', depIds: [FIREBASE_DEP_ID] }]
         });
@@ -635,7 +659,13 @@ describe('detectXcodeDevPackages', () => {
     test('does not classify as dev when package is linked to both test and non-test target', async () => {
         const DEP_ID_2 = 'FFFFFFFFFFFFFFFFFFFFFFFD';
         const pbxproj = makePbxproj({
-            remoteRefs: [{ id: SNAPSHOT_REF_ID, name: 'swift-snapshot-testing', url: 'https://github.com/pointfreeco/swift-snapshot-testing' }],
+            remoteRefs: [
+                {
+                    id: SNAPSHOT_REF_ID,
+                    name: 'swift-snapshot-testing',
+                    url: 'https://github.com/pointfreeco/swift-snapshot-testing'
+                }
+            ],
             productDeps: [
                 { id: SNAPSHOT_DEP_ID, product: 'SnapshotTesting', pkgRefId: SNAPSHOT_REF_ID },
                 { id: DEP_ID_2, product: 'SnapshotTesting', pkgRefId: SNAPSHOT_REF_ID }
@@ -654,7 +684,9 @@ describe('detectXcodeDevPackages', () => {
     });
 
     test('returns empty sets when file cannot be read', async () => {
-        mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+        mockReadFileSync.mockImplementation(() => {
+            throw new Error('ENOENT');
+        });
 
         const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
         const { devRefs, appRefs } = detectXcodeDevPackages('missing.pbxproj');
@@ -665,7 +697,13 @@ describe('detectXcodeDevPackages', () => {
 
     test('derives identity as lowercase repo name from URL with .git suffix', async () => {
         const pbxproj = makePbxproj({
-            remoteRefs: [{ id: SWIFTLINT_REF_ID, name: 'SwiftLintPlugins', url: 'https://github.com/SimplyDanny/SwiftLintPlugins.git' }],
+            remoteRefs: [
+                {
+                    id: SWIFTLINT_REF_ID,
+                    name: 'SwiftLintPlugins',
+                    url: 'https://github.com/SimplyDanny/SwiftLintPlugins.git'
+                }
+            ],
             productDeps: [],
             targets: []
         });

@@ -396,11 +396,7 @@ describe('html report generation', () => {
         await run();
 
         expect(mockGenerateHtmlReport).toHaveBeenCalled();
-        expect(mockWriteFileSync).toHaveBeenCalledWith(
-            expect.stringContaining('deps.html'),
-            '<html></html>',
-            'utf8'
-        );
+        expect(mockWriteFileSync).toHaveBeenCalledWith(expect.stringContaining('deps.html'), '<html></html>', 'utf8');
         expect(mockSetOutput).toHaveBeenCalledWith('html_report_path', 'reports/deps.html');
     });
 
@@ -444,11 +440,7 @@ describe('sbom generation', () => {
         await run();
 
         expect(mockGenerateSbom).toHaveBeenCalled();
-        expect(mockWriteFileSync).toHaveBeenCalledWith(
-            expect.stringContaining('sbom.json'),
-            '{}',
-            'utf8'
-        );
+        expect(mockWriteFileSync).toHaveBeenCalledWith(expect.stringContaining('sbom.json'), '{}', 'utf8');
         expect(mockSetOutput).toHaveBeenCalledWith('sbom_path', 'reports/sbom.json');
     });
 
@@ -541,10 +533,7 @@ describe('dev package auto-detection with workspace', () => {
         const run = await loadRun();
         await run();
 
-        expect(mockDetectDevPackages).toHaveBeenCalledWith(
-            expect.any(String),
-            expect.stringContaining('path/to')
-        );
+        expect(mockDetectDevPackages).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('path/to'));
     });
 
     test('does not call detectDevPackages when development_packages is provided', async () => {
