@@ -19966,11 +19966,15 @@ function detectXcodeDevPackages(pbxprojPath) {
     return { devRefs: /* @__PURE__ */ new Set(), appRefs: /* @__PURE__ */ new Set() };
   }
   const remoteRefToIdentity = /* @__PURE__ */ new Map();
-  for (const m of content.matchAll(/(\w{24}) \/\* XCRemoteSwiftPackageReference "[^"]*" \*\/ = \{[^}]*repositoryURL = "([^"]+)"/g)) {
+  for (const m of content.matchAll(
+    /(\w{24}) \/\* XCRemoteSwiftPackageReference "[^"]*" \*\/ = \{[^}]*repositoryURL = "([^"]+)"/g
+  )) {
     remoteRefToIdentity.set(m[1], identityFromUrl(m[2]));
   }
   const prodDepToIdentity = /* @__PURE__ */ new Map();
-  for (const m of content.matchAll(/(\w{24}) \/\* \S+ \*\/ = \{\s*isa = XCSwiftPackageProductDependency;\s*(?:package = (\w+) [^;]+;\s*)?productName = [^;]+;/g)) {
+  for (const m of content.matchAll(
+    /(\w{24}) \/\* \S+ \*\/ = \{\s*isa = XCSwiftPackageProductDependency;\s*(?:package = (\w+) [^;]+;\s*)?productName = [^;]+;/g
+  )) {
     const depId = m[1];
     const pkgRef = m[2];
     if (pkgRef && remoteRefToIdentity.has(pkgRef)) {
@@ -19979,7 +19983,9 @@ function detectXcodeDevPackages(pbxprojPath) {
   }
   const devRefs = /* @__PURE__ */ new Set();
   const appRefs = /* @__PURE__ */ new Set();
-  for (const m of content.matchAll(/isa = PBXNativeTarget;.*?name = ([^;]+);.*?packageProductDependencies = \(([^)]*)\)/gs)) {
+  for (const m of content.matchAll(
+    /isa = PBXNativeTarget;.*?name = ([^;]+);.*?packageProductDependencies = \(([^)]*)\)/gs
+  )) {
     const rawName = m[1].trim().replace(/^"|"$/g, "");
     const isTestTarget = rawName.endsWith("Tests");
     for (const depId of m[2].matchAll(/(\w{24})/g)) {
