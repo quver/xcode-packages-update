@@ -1064,14 +1064,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol || ""}//${url.hostname || ""}:${port}`;
-        let path5 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path6 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin[origin.length - 1] === "/") {
           origin = origin.slice(0, origin.length - 1);
         }
-        if (path5 && path5[0] !== "/") {
-          path5 = `/${path5}`;
+        if (path6 && path6[0] !== "/") {
+          path6 = `/${path6}`;
         }
-        return new URL(`${origin}${path5}`);
+        return new URL(`${origin}${path6}`);
       }
       if (!isHttpOrHttpsPrefixed(url.origin || url.protocol)) {
         throw new InvalidArgumentError("Invalid URL protocol: the URL must start with `http:` or `https:`.");
@@ -1522,39 +1522,39 @@ var require_diagnostics = __commonJS({
       });
       diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
         const {
-          request: { method, path: path5, origin }
+          request: { method, path: path6, origin }
         } = evt;
-        debuglog("sending request to %s %s/%s", method, origin, path5);
+        debuglog("sending request to %s %s/%s", method, origin, path6);
       });
       diagnosticsChannel.channel("undici:request:headers").subscribe((evt) => {
         const {
-          request: { method, path: path5, origin },
+          request: { method, path: path6, origin },
           response: { statusCode }
         } = evt;
         debuglog(
           "received response to %s %s/%s - HTTP %d",
           method,
           origin,
-          path5,
+          path6,
           statusCode
         );
       });
       diagnosticsChannel.channel("undici:request:trailers").subscribe((evt) => {
         const {
-          request: { method, path: path5, origin }
+          request: { method, path: path6, origin }
         } = evt;
-        debuglog("trailers received from %s %s/%s", method, origin, path5);
+        debuglog("trailers received from %s %s/%s", method, origin, path6);
       });
       diagnosticsChannel.channel("undici:request:error").subscribe((evt) => {
         const {
-          request: { method, path: path5, origin },
+          request: { method, path: path6, origin },
           error: error2
         } = evt;
         debuglog(
           "request to %s %s/%s errored - %s",
           method,
           origin,
-          path5,
+          path6,
           error2.message
         );
       });
@@ -1603,9 +1603,9 @@ var require_diagnostics = __commonJS({
         });
         diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
           const {
-            request: { method, path: path5, origin }
+            request: { method, path: path6, origin }
           } = evt;
-          debuglog("sending request to %s %s/%s", method, origin, path5);
+          debuglog("sending request to %s %s/%s", method, origin, path6);
         });
       }
       diagnosticsChannel.channel("undici:websocket:open").subscribe((evt) => {
@@ -1668,7 +1668,7 @@ var require_request = __commonJS({
     var kHandler = /* @__PURE__ */ Symbol("handler");
     var Request = class {
       constructor(origin, {
-        path: path5,
+        path: path6,
         method,
         body,
         headers,
@@ -1683,11 +1683,11 @@ var require_request = __commonJS({
         expectContinue,
         servername
       }, handler) {
-        if (typeof path5 !== "string") {
+        if (typeof path6 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path5[0] !== "/" && !(path5.startsWith("http://") || path5.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path6[0] !== "/" && !(path6.startsWith("http://") || path6.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.test(path5)) {
+        } else if (invalidPathRegex.test(path6)) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -1753,7 +1753,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? buildURL(path5, query) : path5;
+        this.path = query ? buildURL(path6, query) : path6;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -2041,13 +2041,20 @@ var require_dispatcher_base = __commonJS({
     var kOnDestroyed = /* @__PURE__ */ Symbol("onDestroyed");
     var kOnClosed = /* @__PURE__ */ Symbol("onClosed");
     var kInterceptedDispatch = /* @__PURE__ */ Symbol("Intercepted Dispatch");
+    var kWebSocketOptions = /* @__PURE__ */ Symbol("webSocketOptions");
     var DispatcherBase = class extends Dispatcher {
-      constructor() {
+      constructor(opts) {
         super();
         this[kDestroyed] = false;
         this[kOnDestroyed] = null;
         this[kClosed] = false;
         this[kOnClosed] = [];
+        this[kWebSocketOptions] = opts?.webSocket ?? {};
+      }
+      get webSocketOptions() {
+        return {
+          maxPayloadSize: this[kWebSocketOptions].maxPayloadSize ?? 128 * 1024 * 1024
+        };
       }
       get destroyed() {
         return this[kDestroyed];
@@ -5862,23 +5869,54 @@ var require_client_h1 = __commonJS({
             currentBufferRef = null;
           }
           const offset = llhttp.llhttp_get_error_pos(this.ptr) - currentBufferPtr;
-          if (ret === constants3.ERROR.PAUSED_UPGRADE) {
-            this.onUpgrade(data.slice(offset));
-          } else if (ret === constants3.ERROR.PAUSED) {
-            this.paused = true;
-            socket.unshift(data.slice(offset));
-          } else if (ret !== constants3.ERROR.OK) {
-            const ptr = llhttp.llhttp_get_error_reason(this.ptr);
-            let message = "";
-            if (ptr) {
-              const len = new Uint8Array(llhttp.memory.buffer, ptr).indexOf(0);
-              message = "Response does not match the HTTP/1.1 protocol (" + Buffer.from(llhttp.memory.buffer, ptr, len).toString() + ")";
+          if (ret !== constants3.ERROR.OK) {
+            const body = data.subarray(offset);
+            if (ret === constants3.ERROR.PAUSED_UPGRADE) {
+              this.onUpgrade(body);
+            } else if (ret === constants3.ERROR.PAUSED) {
+              this.paused = true;
+              socket.unshift(body);
+            } else {
+              throw this.createError(ret, body);
             }
-            throw new HTTPParserError(message, constants3.ERROR[ret], data.slice(offset));
           }
         } catch (err) {
           util.destroy(socket, err);
         }
+      }
+      finish() {
+        assert(currentParser === null);
+        assert(this.ptr != null);
+        assert(!this.paused);
+        const { llhttp } = this;
+        let ret;
+        try {
+          currentParser = this;
+          ret = llhttp.llhttp_finish(this.ptr);
+        } finally {
+          currentParser = null;
+        }
+        if (ret === constants3.ERROR.OK) {
+          return null;
+        }
+        if (ret === constants3.ERROR.PAUSED || ret === constants3.ERROR.PAUSED_UPGRADE) {
+          this.paused = true;
+          return null;
+        }
+        return this.createError(ret, EMPTY_BUF);
+      }
+      createError(ret, data) {
+        const { llhttp, contentLength, bytesRead } = this;
+        if (contentLength && bytesRead !== parseInt(contentLength, 10)) {
+          return new ResponseContentLengthMismatchError();
+        }
+        const ptr = llhttp.llhttp_get_error_reason(this.ptr);
+        let message = "";
+        if (ptr) {
+          const len = new Uint8Array(llhttp.memory.buffer, ptr).indexOf(0);
+          message = "Response does not match the HTTP/1.1 protocol (" + Buffer.from(llhttp.memory.buffer, ptr, len).toString() + ")";
+        }
+        return new HTTPParserError(message, constants3.ERROR[ret], data);
       }
       destroy() {
         assert(this.ptr != null);
@@ -6151,7 +6189,11 @@ var require_client_h1 = __commonJS({
         assert(err.code !== "ERR_TLS_CERT_ALTNAME_INVALID");
         const parser = this[kParser];
         if (err.code === "ECONNRESET" && parser.statusCode && !parser.shouldKeepAlive) {
-          parser.onMessageComplete();
+          const parserErr = parser.finish();
+          if (parserErr) {
+            this[kError] = parserErr;
+            this[kClient][kOnError](parserErr);
+          }
           return;
         }
         this[kError] = err;
@@ -6166,7 +6208,10 @@ var require_client_h1 = __commonJS({
       addListener(socket, "end", function() {
         const parser = this[kParser];
         if (parser.statusCode && !parser.shouldKeepAlive) {
-          parser.onMessageComplete();
+          const parserErr = parser.finish();
+          if (parserErr) {
+            util.destroy(this, parserErr);
+          }
           return;
         }
         util.destroy(this, new SocketError("other side closed", util.getSocketInfo(this)));
@@ -6176,7 +6221,7 @@ var require_client_h1 = __commonJS({
         const parser = this[kParser];
         if (parser) {
           if (!this[kError] && parser.statusCode && !parser.shouldKeepAlive) {
-            parser.onMessageComplete();
+            this[kError] = parser.finish() || this[kError];
           }
           this[kParser].destroy();
           this[kParser] = null;
@@ -6272,7 +6317,7 @@ var require_client_h1 = __commonJS({
       return method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE" && method !== "CONNECT";
     }
     function writeH1(client, request) {
-      const { method, path: path5, host, upgrade, blocking, reset } = request;
+      const { method, path: path6, host, upgrade, blocking, reset } = request;
       let { body, headers, contentLength } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       if (util.isFormDataLike(body)) {
@@ -6338,7 +6383,7 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path5} HTTP/1.1\r
+      let header = `${method} ${path6} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -6864,7 +6909,7 @@ var require_client_h2 = __commonJS({
     }
     function writeH2(client, request) {
       const session = client[kHTTP2Session];
-      const { method, path: path5, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { method, path: path6, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let { body } = request;
       if (upgrade) {
         util.errorRequest(client, request, new Error("Upgrade not supported for H2"));
@@ -6931,7 +6976,7 @@ var require_client_h2 = __commonJS({
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path5;
+      headers[HTTP2_HEADER_PATH] = path6;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -7284,9 +7329,9 @@ var require_redirect_handler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path5 = search ? `${pathname}${search}` : pathname;
+        const path6 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path5;
+        this.opts.path = path6;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -7486,9 +7531,10 @@ var require_client = __commonJS({
         autoSelectFamilyAttemptTimeout,
         // h2
         maxConcurrentStreams,
-        allowH2
+        allowH2,
+        webSocket
       } = {}) {
-        super();
+        super({ webSocket });
         if (keepAlive !== void 0) {
           throw new InvalidArgumentError("unsupported keepAlive, use pipelining=0 instead");
         }
@@ -7994,8 +8040,8 @@ var require_pool_base = __commonJS({
     var kRemoveClient = /* @__PURE__ */ Symbol("remove client");
     var kStats = /* @__PURE__ */ Symbol("stats");
     var PoolBase = class extends DispatcherBase {
-      constructor() {
-        super();
+      constructor(opts) {
+        super(opts);
         this[kQueue] = new FixedQueue();
         this[kClients] = [];
         this[kQueued] = 0;
@@ -8166,7 +8212,6 @@ var require_pool = __commonJS({
         allowH2,
         ...options
       } = {}) {
-        super();
         if (connections != null && (!Number.isFinite(connections) || connections < 0)) {
           throw new InvalidArgumentError("invalid connections");
         }
@@ -8187,6 +8232,7 @@ var require_pool = __commonJS({
             ...connect
           });
         }
+        super(options);
         this[kInterceptors] = options.interceptors?.Pool && Array.isArray(options.interceptors.Pool) ? options.interceptors.Pool : [];
         this[kConnections] = connections || null;
         this[kUrl] = util.parseOrigin(origin);
@@ -8386,7 +8432,6 @@ var require_agent = __commonJS({
     }
     var Agent = class extends DispatcherBase {
       constructor({ factory = defaultFactory, maxRedirections = 0, connect, ...options } = {}) {
-        super();
         if (typeof factory !== "function") {
           throw new InvalidArgumentError("factory must be a function.");
         }
@@ -8396,6 +8441,7 @@ var require_agent = __commonJS({
         if (!Number.isInteger(maxRedirections) || maxRedirections < 0) {
           throw new InvalidArgumentError("maxRedirections must be a positive number");
         }
+        super(options);
         if (connect && typeof connect !== "function") {
           connect = { ...connect };
         }
@@ -8520,10 +8566,10 @@ var require_proxy_agent = __commonJS({
         };
         const {
           origin,
-          path: path5 = "/",
+          path: path6 = "/",
           headers = {}
         } = opts;
-        opts.path = origin + path5;
+        opts.path = origin + path6;
         if (!("host" in headers) && !("Host" in headers)) {
           const { host } = new URL2(origin);
           headers.host = host;
@@ -10444,20 +10490,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path5) {
-      if (typeof path5 !== "string") {
-        return path5;
+    function safeUrl(path6) {
+      if (typeof path6 !== "string") {
+        return path6;
       }
-      const pathSegments = path5.split("?");
+      const pathSegments = path6.split("?");
       if (pathSegments.length !== 2) {
-        return path5;
+        return path6;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path5, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path5);
+    function matchKey(mockDispatch2, { path: path6, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path6);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -10479,7 +10525,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path5 }) => matchValue(safeUrl(path5), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path6 }) => matchValue(safeUrl(path6), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -10517,9 +10563,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path5, method, body, headers, query } = opts;
+      const { path: path6, method, body, headers, query } = opts;
       return {
-        path: path5,
+        path: path6,
         method,
         body,
         headers,
@@ -10982,10 +11028,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path5, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path6, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path5,
+            Path: path6,
             "Status code": statusCode,
             Persistent: persist ? PERSISTENT : NOT_PERSISTENT,
             Invocations: timesInvoked,
@@ -15866,9 +15912,9 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path5) {
-      for (let i = 0; i < path5.length; ++i) {
-        const code = path5.charCodeAt(i);
+    function validateCookiePath(path6) {
+      for (let i = 0; i < path6.length; ++i) {
+        const code = path6.charCodeAt(i);
         if (code < 32 || // exclude CTLs (0-31)
         code === 127 || // DEL
         code === 59) {
@@ -17029,31 +17075,26 @@ var require_permessage_deflate = __commonJS({
     var tail = Buffer.from([0, 0, 255, 255]);
     var kBuffer = /* @__PURE__ */ Symbol("kBuffer");
     var kLength = /* @__PURE__ */ Symbol("kLength");
-    var kDefaultMaxDecompressedSize = 4 * 1024 * 1024;
     var PerMessageDeflate = class {
       /** @type {import('node:zlib').InflateRaw} */
       #inflate;
       #options = {};
-      /** @type {number} */
-      #maxDecompressedSize;
-      /** @type {boolean} */
-      #aborted = false;
-      /** @type {Function|null} */
-      #currentCallback = null;
+      #maxPayloadSize = 0;
       /**
        * @param {Map<string, string>} extensions
-       * @param {{ maxDecompressedMessageSize?: number }} [options]
        */
-      constructor(extensions, options = {}) {
+      constructor(extensions, options) {
         this.#options.serverNoContextTakeover = extensions.has("server_no_context_takeover");
         this.#options.serverMaxWindowBits = extensions.get("server_max_window_bits");
-        this.#maxDecompressedSize = options.maxDecompressedMessageSize ?? kDefaultMaxDecompressedSize;
+        this.#maxPayloadSize = options.maxPayloadSize;
       }
+      /**
+       * Decompress a compressed payload.
+       * @param {Buffer} chunk Compressed data
+       * @param {boolean} fin Final fragment flag
+       * @param {Function} callback Callback function
+       */
       decompress(chunk, fin, callback) {
-        if (this.#aborted) {
-          callback(new MessageSizeExceededError());
-          return;
-        }
         if (!this.#inflate) {
           let windowBits = Z_DEFAULT_WINDOWBITS;
           if (this.#options.serverMaxWindowBits) {
@@ -17072,20 +17113,11 @@ var require_permessage_deflate = __commonJS({
           this.#inflate[kBuffer] = [];
           this.#inflate[kLength] = 0;
           this.#inflate.on("data", (data) => {
-            if (this.#aborted) {
-              return;
-            }
             this.#inflate[kLength] += data.length;
-            if (this.#inflate[kLength] > this.#maxDecompressedSize) {
-              this.#aborted = true;
+            if (this.#maxPayloadSize > 0 && this.#inflate[kLength] > this.#maxPayloadSize) {
+              callback(new MessageSizeExceededError());
               this.#inflate.removeAllListeners();
-              this.#inflate.destroy();
               this.#inflate = null;
-              if (this.#currentCallback) {
-                const cb = this.#currentCallback;
-                this.#currentCallback = null;
-                cb(new MessageSizeExceededError());
-              }
               return;
             }
             this.#inflate[kBuffer].push(data);
@@ -17095,19 +17127,17 @@ var require_permessage_deflate = __commonJS({
             callback(err);
           });
         }
-        this.#currentCallback = callback;
         this.#inflate.write(chunk);
         if (fin) {
           this.#inflate.write(tail);
         }
         this.#inflate.flush(() => {
-          if (this.#aborted || !this.#inflate) {
+          if (!this.#inflate) {
             return;
           }
           const full = Buffer.concat(this.#inflate[kBuffer], this.#inflate[kLength]);
           this.#inflate[kBuffer].length = 0;
           this.#inflate[kLength] = 0;
-          this.#currentCallback = null;
           callback(null, full);
         });
       }
@@ -17138,8 +17168,10 @@ var require_receiver = __commonJS({
     var { WebsocketFrameSend } = require_frame();
     var { closeWebSocketConnection } = require_connection();
     var { PerMessageDeflate } = require_permessage_deflate();
+    var { MessageSizeExceededError } = require_errors();
     var ByteParser = class extends Writable {
       #buffers = [];
+      #fragmentsBytes = 0;
       #byteOffset = 0;
       #loop = false;
       #state = parserStates.INFO;
@@ -17147,18 +17179,18 @@ var require_receiver = __commonJS({
       #fragments = [];
       /** @type {Map<string, PerMessageDeflate>} */
       #extensions;
-      /** @type {{ maxDecompressedMessageSize?: number }} */
-      #options;
+      /** @type {number} */
+      #maxPayloadSize;
       /**
        * @param {import('./websocket').WebSocket} ws
        * @param {Map<string, string>|null} extensions
-       * @param {{ maxDecompressedMessageSize?: number }} [options]
+       * @param {{ maxPayloadSize?: number }} [options]
        */
       constructor(ws, extensions, options = {}) {
         super();
         this.ws = ws;
         this.#extensions = extensions == null ? /* @__PURE__ */ new Map() : extensions;
-        this.#options = options;
+        this.#maxPayloadSize = options.maxPayloadSize ?? 0;
         if (this.#extensions.has("permessage-deflate")) {
           this.#extensions.set("permessage-deflate", new PerMessageDeflate(extensions, options));
         }
@@ -17172,6 +17204,13 @@ var require_receiver = __commonJS({
         this.#byteOffset += chunk.length;
         this.#loop = true;
         this.run(callback);
+      }
+      #validatePayloadLength() {
+        if (this.#maxPayloadSize > 0 && !isControlFrame(this.#info.opcode) && this.#info.payloadLength > this.#maxPayloadSize) {
+          failWebsocketConnection(this.ws, "Payload size exceeds maximum allowed size");
+          return false;
+        }
+        return true;
       }
       /**
        * Runs whenever a new chunk is received.
@@ -17232,6 +17271,9 @@ var require_receiver = __commonJS({
             if (payloadLength <= 125) {
               this.#info.payloadLength = payloadLength;
               this.#state = parserStates.READ_DATA;
+              if (!this.#validatePayloadLength()) {
+                return;
+              }
             } else if (payloadLength === 126) {
               this.#state = parserStates.PAYLOADLENGTH_16;
             } else if (payloadLength === 127) {
@@ -17252,6 +17294,9 @@ var require_receiver = __commonJS({
             const buffer = this.consume(2);
             this.#info.payloadLength = buffer.readUInt16BE(0);
             this.#state = parserStates.READ_DATA;
+            if (!this.#validatePayloadLength()) {
+              return;
+            }
           } else if (this.#state === parserStates.PAYLOADLENGTH_64) {
             if (this.#byteOffset < 8) {
               return callback();
@@ -17265,6 +17310,9 @@ var require_receiver = __commonJS({
             }
             this.#info.payloadLength = lower;
             this.#state = parserStates.READ_DATA;
+            if (!this.#validatePayloadLength()) {
+              return;
+            }
           } else if (this.#state === parserStates.READ_DATA) {
             if (this.#byteOffset < this.#info.payloadLength) {
               return callback();
@@ -17275,32 +17323,41 @@ var require_receiver = __commonJS({
               this.#state = parserStates.INFO;
             } else {
               if (!this.#info.compressed) {
-                this.#fragments.push(body);
+                this.writeFragments(body);
+                if (this.#maxPayloadSize > 0 && this.#fragmentsBytes > this.#maxPayloadSize) {
+                  failWebsocketConnection(this.ws, new MessageSizeExceededError().message);
+                  return;
+                }
                 if (!this.#info.fragmented && this.#info.fin) {
-                  const fullMessage = Buffer.concat(this.#fragments);
-                  websocketMessageReceived(this.ws, this.#info.binaryType, fullMessage);
-                  this.#fragments.length = 0;
+                  websocketMessageReceived(this.ws, this.#info.binaryType, this.consumeFragments());
                 }
                 this.#state = parserStates.INFO;
               } else {
-                this.#extensions.get("permessage-deflate").decompress(body, this.#info.fin, (error2, data) => {
-                  if (error2) {
-                    failWebsocketConnection(this.ws, error2.message);
-                    return;
-                  }
-                  this.#fragments.push(data);
-                  if (!this.#info.fin) {
-                    this.#state = parserStates.INFO;
+                this.#extensions.get("permessage-deflate").decompress(
+                  body,
+                  this.#info.fin,
+                  (error2, data) => {
+                    if (error2) {
+                      failWebsocketConnection(this.ws, error2.message);
+                      return;
+                    }
+                    this.writeFragments(data);
+                    if (this.#maxPayloadSize > 0 && this.#fragmentsBytes > this.#maxPayloadSize) {
+                      failWebsocketConnection(this.ws, new MessageSizeExceededError().message);
+                      return;
+                    }
+                    if (!this.#info.fin) {
+                      this.#state = parserStates.INFO;
+                      this.#loop = true;
+                      this.run(callback);
+                      return;
+                    }
+                    websocketMessageReceived(this.ws, this.#info.binaryType, this.consumeFragments());
                     this.#loop = true;
+                    this.#state = parserStates.INFO;
                     this.run(callback);
-                    return;
                   }
-                  websocketMessageReceived(this.ws, this.#info.binaryType, Buffer.concat(this.#fragments));
-                  this.#loop = true;
-                  this.#state = parserStates.INFO;
-                  this.#fragments.length = 0;
-                  this.run(callback);
-                });
+                );
                 this.#loop = false;
                 break;
               }
@@ -17342,6 +17399,21 @@ var require_receiver = __commonJS({
         }
         this.#byteOffset -= n;
         return buffer;
+      }
+      writeFragments(fragment) {
+        this.#fragmentsBytes += fragment.length;
+        this.#fragments.push(fragment);
+      }
+      consumeFragments() {
+        const fragments = this.#fragments;
+        if (fragments.length === 1) {
+          this.#fragmentsBytes = 0;
+          return fragments.shift();
+        }
+        const output = Buffer.concat(fragments, this.#fragmentsBytes);
+        this.#fragments = [];
+        this.#fragmentsBytes = 0;
+        return output;
       }
       parseCloseBody(data) {
         assert(data.length !== 1);
@@ -17554,8 +17626,6 @@ var require_websocket = __commonJS({
       #extensions = "";
       /** @type {SendQueue} */
       #sendQueue;
-      /** @type {{ maxDecompressedMessageSize?: number }} */
-      #options;
       /**
        * @param {string} url
        * @param {string|string[]} protocols
@@ -17599,9 +17669,6 @@ var require_websocket = __commonJS({
           throw new DOMException("Invalid Sec-WebSocket-Protocol value", "SyntaxError");
         }
         this[kWebSocketURL] = new URL(urlRecord.href);
-        this.#options = {
-          maxDecompressedMessageSize: options.maxDecompressedMessageSize
-        };
         const client = environmentSettingsObject.settingsObject;
         this[kController] = establishWebSocketConnection(
           urlRecord,
@@ -17785,7 +17852,10 @@ var require_websocket = __commonJS({
        */
       #onConnectionEstablished(response, parsedExtensions) {
         this[kResponse] = response;
-        const parser = new ByteParser(this, parsedExtensions, this.#options);
+        const maxPayloadSize = this[kController]?.dispatcher?.webSocketOptions?.maxPayloadSize;
+        const parser = new ByteParser(this, parsedExtensions, {
+          maxPayloadSize
+        });
         parser.on("drain", onParserDrain);
         parser.on("error", onParserError.bind(this));
         response.socket.ws = this;
@@ -17860,19 +17930,6 @@ var require_websocket = __commonJS({
       {
         key: "headers",
         converter: webidl.nullableConverter(webidl.converters.HeadersInit)
-      },
-      {
-        key: "maxDecompressedMessageSize",
-        converter: webidl.nullableConverter((V) => {
-          V = webidl.converters["unsigned long long"](V);
-          if (V <= 0) {
-            throw webidl.errors.exception({
-              header: "WebSocket constructor",
-              message: "maxDecompressedMessageSize must be greater than 0"
-            });
-          }
-          return V;
-        })
       }
     ]);
     webidl.converters["DOMString or sequence<DOMString> or WebSocketInit"] = function(V) {
@@ -18534,11 +18591,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path5 = opts.path;
+          let path6 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path5 = `/${path5}`;
+            path6 = `/${path6}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path5);
+          url = new URL(util.parseOrigin(url).origin + path6);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -19819,13 +19876,35 @@ function saveState(name, value) {
 
 // src/main.ts
 var import_fs3 = __toESM(require("fs"), 1);
-var import_path = __toESM(require("path"), 1);
+var import_path2 = __toESM(require("path"), 1);
 
 // src/packages.ts
 var import_fs2 = __toESM(require("fs"), 1);
+var import_path = __toESM(require("path"), 1);
+var import_crypto = require("crypto");
+function parseResolved(filePath) {
+  const content = import_fs2.default.readFileSync(filePath, "utf8");
+  const parsed = JSON.parse(content);
+  return parsed.pins ?? [];
+}
+function resolveVersion(state) {
+  return state?.version ?? state?.branch ?? state?.revision ?? "";
+}
 function getPackages(filePath) {
-  const { pins } = JSON.parse(import_fs2.default.readFileSync(filePath, "utf8"));
-  return new Map(pins.map((pin) => [pin.identity, pin.state.version ?? pin.state.branch ?? pin.state.revision]));
+  const pins = parseResolved(filePath);
+  return new Map(pins.map((pin) => [pin.identity, resolveVersion(pin.state)]));
+}
+function getPackagesWithInfo(filePath) {
+  const pins = parseResolved(filePath);
+  return new Map(
+    pins.map((pin) => [
+      pin.identity,
+      {
+        version: resolveVersion(pin.state),
+        url: pin.location ?? ""
+      }
+    ])
+  );
 }
 function comparePackages(before, after) {
   const removed = [...before.keys()].filter((k) => !after.has(k));
@@ -19833,27 +19912,310 @@ function comparePackages(before, after) {
   const updated = [...after.keys()].filter((k) => before.has(k) && before.get(k) !== after.get(k));
   return { removed, added, updated };
 }
+var EXCLUDE_DIRS = /* @__PURE__ */ new Set([".build", "node_modules", ".git", "DerivedData", ".spm-tmp", ".swiftpm"]);
+function findPackageSwiftFiles(rootDir) {
+  const results = [];
+  function scan(dir) {
+    let entries;
+    try {
+      entries = import_fs2.default.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory() && !EXCLUDE_DIRS.has(entry.name)) {
+        scan(import_path.default.join(dir, entry.name));
+      } else if (entry.isFile() && entry.name === "Package.swift") {
+        results.push(import_path.default.join(dir, entry.name));
+      }
+    }
+  }
+  scan(rootDir);
+  return results;
+}
+function extractBlocks(content, keyword) {
+  const blocks = [];
+  const pattern = new RegExp(`(?<![A-Za-z0-9])\\.${keyword}\\s*\\(`, "g");
+  let match;
+  while ((match = pattern.exec(content)) !== null) {
+    let depth = 1;
+    let i = match.index + match[0].length;
+    while (i < content.length && depth > 0) {
+      if (content[i] === "(") depth++;
+      else if (content[i] === ")") depth--;
+      i++;
+    }
+    blocks.push(content.slice(match.index + match[0].length, i - 1));
+  }
+  return blocks;
+}
+function productPackageRefs(block) {
+  return [...block.matchAll(/\.product\s*\([^)]*package:\s*"([^"]+)"/g)].map(([, pkg]) => pkg.toLowerCase());
+}
+function pluginPackageRefs(block) {
+  return [...block.matchAll(/\.plugin\s*\([^)]*package:\s*"([^"]+)"/g)].map(([, pkg]) => pkg.toLowerCase());
+}
+function identityFromUrl(url) {
+  return url.replace(/\.git\s*$/, "").replace(/\/+$/, "").split("/").pop().toLowerCase();
+}
+function detectXcodeDevPackages(pbxprojPath) {
+  let content;
+  try {
+    content = import_fs2.default.readFileSync(pbxprojPath, "utf8");
+  } catch {
+    return { devRefs: /* @__PURE__ */ new Set(), appRefs: /* @__PURE__ */ new Set() };
+  }
+  const remoteRefToIdentity = /* @__PURE__ */ new Map();
+  for (const m of content.matchAll(/(\w{24}) \/\* XCRemoteSwiftPackageReference "[^"]*" \*\/ = \{[^}]*repositoryURL = "([^"]+)"/g)) {
+    remoteRefToIdentity.set(m[1], identityFromUrl(m[2]));
+  }
+  const prodDepToIdentity = /* @__PURE__ */ new Map();
+  for (const m of content.matchAll(/(\w{24}) \/\* \S+ \*\/ = \{\s*isa = XCSwiftPackageProductDependency;\s*(?:package = (\w+) [^;]+;\s*)?productName = [^;]+;/g)) {
+    const depId = m[1];
+    const pkgRef = m[2];
+    if (pkgRef && remoteRefToIdentity.has(pkgRef)) {
+      prodDepToIdentity.set(depId, remoteRefToIdentity.get(pkgRef));
+    }
+  }
+  const devRefs = /* @__PURE__ */ new Set();
+  const appRefs = /* @__PURE__ */ new Set();
+  for (const m of content.matchAll(/isa = PBXNativeTarget;.*?name = ([^;]+);.*?packageProductDependencies = \(([^)]*)\)/gs)) {
+    const rawName = m[1].trim().replace(/^"|"$/g, "");
+    const isTestTarget = rawName.endsWith("Tests");
+    for (const depId of m[2].matchAll(/(\w{24})/g)) {
+      const identity = prodDepToIdentity.get(depId[1]);
+      if (identity) {
+        (isTestTarget ? devRefs : appRefs).add(identity);
+      }
+    }
+  }
+  for (const identity of remoteRefToIdentity.values()) {
+    if (!appRefs.has(identity) && !devRefs.has(identity)) {
+      devRefs.add(identity);
+    }
+  }
+  return { devRefs, appRefs };
+}
+function findPbxprojFiles(rootDir) {
+  const results = [];
+  let entries;
+  try {
+    entries = import_fs2.default.readdirSync(rootDir, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.endsWith(".xcodeproj")) {
+      const candidate = import_path.default.join(rootDir, entry.name, "project.pbxproj");
+      if (import_fs2.default.existsSync(candidate)) results.push(candidate);
+    }
+  }
+  return results;
+}
+function detectDevPackages(resolvedFilePath, projectRoot) {
+  const devRefs = /* @__PURE__ */ new Set();
+  const appRefs = /* @__PURE__ */ new Set();
+  for (const filePath of findPackageSwiftFiles(projectRoot)) {
+    let content;
+    try {
+      content = import_fs2.default.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    for (const block of extractBlocks(content, "testTarget")) {
+      for (const ref of productPackageRefs(block)) devRefs.add(ref);
+    }
+    for (const block of extractBlocks(content, "target")) {
+      for (const ref of productPackageRefs(block)) appRefs.add(ref);
+      for (const [, pluginsBlock] of block.matchAll(/plugins\s*:\s*\[([^\]]*)\]/gs)) {
+        for (const ref of pluginPackageRefs(pluginsBlock)) devRefs.add(ref);
+      }
+    }
+  }
+  for (const pbxprojPath of findPbxprojFiles(projectRoot)) {
+    const { devRefs: pbxDev, appRefs: pbxApp } = detectXcodeDevPackages(pbxprojPath);
+    for (const ref of pbxDev) devRefs.add(ref);
+    for (const ref of pbxApp) appRefs.add(ref);
+  }
+  const resolved = getPackagesWithInfo(resolvedFilePath);
+  const result = /* @__PURE__ */ new Set();
+  for (const ref of devRefs) {
+    if (!appRefs.has(ref) && resolved.has(ref)) {
+      result.add(ref);
+    }
+  }
+  return result;
+}
+var HTML_STYLES = `
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1d1d1f; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  .meta { font-size: 0.875rem; color: #6e6e73; margin-bottom: 1.5rem; }
+  .meta span { margin-right: 1.5rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th { background: #f5f5f7; text-align: left; padding: 10px 12px; border-bottom: 2px solid #d1d1d6; }
+  td { padding: 9px 12px; border-bottom: 1px solid #e5e5ea; vertical-align: middle; }
+  tr:hover td { background: #f9f9f9; }
+  tr.added td { background: #e6f9ec; }
+  tr.removed td { background: #fde8e8; text-decoration: line-through; color: #6e6e73; }
+  tr.updated td { background: #fff8e6; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.78rem; font-weight: 500; }
+  .badge-app { background: #e3f2fd; color: #1565c0; }
+  .badge-dev { background: #f3e5f5; color: #7b1fa2; }
+  .badge-added { background: #e6f9ec; color: #2e7d32; }
+  .badge-removed { background: #fde8e8; color: #c62828; }
+  .badge-updated { background: #fff8e6; color: #e65100; }
+  a { color: #0071e3; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .version-arrow { color: #6e6e73; margin: 0 4px; }
+`.trim();
+function typeBadge(identity, devPackages) {
+  return devPackages.has(identity) ? '<span class="badge badge-dev">\u{1F6E0} Development</span>' : '<span class="badge badge-app">\u{1F4E6} App</span>';
+}
+function changeBadge(identity, compare) {
+  if (compare.added.includes(identity)) return '<span class="badge badge-added">\u2728 added</span>';
+  if (compare.removed.includes(identity)) return '<span class="badge badge-removed">\u{1F5D1} removed</span>';
+  if (compare.updated.includes(identity)) return '<span class="badge badge-updated">\u2B06 updated</span>';
+  return "";
+}
+function rowClass(identity, compare) {
+  if (compare.added.includes(identity)) return ' class="added"';
+  if (compare.removed.includes(identity)) return ' class="removed"';
+  if (compare.updated.includes(identity)) return ' class="updated"';
+  return "";
+}
+function versionCell(identity, beforeInfo, afterInfo, compare) {
+  const beforeVersion = beforeInfo.get(identity)?.version ?? "";
+  const afterVersion = afterInfo.get(identity)?.version ?? "";
+  if (compare.updated.includes(identity) && beforeVersion && afterVersion && beforeVersion !== afterVersion) {
+    return `${beforeVersion}<span class="version-arrow">\u2192</span>${afterVersion}`;
+  }
+  return afterVersion || beforeVersion;
+}
+function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__PURE__ */ new Set()) {
+  const allIdentities = [.../* @__PURE__ */ new Set([...beforeInfo.keys(), ...afterInfo.keys()])].sort();
+  const rows = allIdentities.map((identity) => {
+    const info2 = afterInfo.get(identity) ?? beforeInfo.get(identity);
+    const urlCell = info2.url ? `<a href="${escapeHtml(info2.url)}" target="_blank">${escapeHtml(identity)}</a>` : escapeHtml(identity);
+    return [
+      `<tr${rowClass(identity, compare)}>`,
+      `  <td>${urlCell}</td>`,
+      `  <td><code>${escapeHtml(versionCell(identity, beforeInfo, afterInfo, compare))}</code></td>`,
+      `  <td>${typeBadge(identity, devPackages)}</td>`,
+      `  <td>${changeBadge(identity, compare)}</td>`,
+      `</tr>`
+    ].join("\n");
+  }).join("\n");
+  const total = allIdentities.length;
+  const added = compare.added.length;
+  const removed = compare.removed.length;
+  const updated = compare.updated.length;
+  const generated = (/* @__PURE__ */ new Date()).toUTCString();
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swift Package Dependencies</title>
+<style>${HTML_STYLES}</style>
+</head>
+<body>
+<h1>Swift Package Dependencies</h1>
+<div class="meta">
+  <span>\u{1F4E6} Total: ${total}</span>
+  <span>\u2728 Added: ${added}</span>
+  <span>\u{1F5D1} Removed: ${removed}</span>
+  <span>\u2B06 Updated: ${updated}</span>
+  <span>\u{1F552} ${escapeHtml(generated)}</span>
+</div>
+<table>
+<thead>
+  <tr>
+    <th>Package</th>
+    <th>Version</th>
+    <th>Type</th>
+    <th>Change</th>
+  </tr>
+</thead>
+<tbody>
+${rows}
+</tbody>
+</table>
+</body>
+</html>`;
+}
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function buildPurl(identity, version, url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname;
+    const pathParts = parsed.pathname.replace(/^\/|\.git$/g, "").split("/").filter(Boolean);
+    if (pathParts.length >= 2) {
+      const namespace = [host, ...pathParts.slice(0, -1)].join("/");
+      const name = pathParts[pathParts.length - 1];
+      return `pkg:swift/${namespace}/${name}@${version}`;
+    }
+  } catch {
+  }
+  return `pkg:swift/${identity}@${version}`;
+}
+function generateSbom(afterInfo, devPackages = /* @__PURE__ */ new Set()) {
+  const components = [...afterInfo.entries()].map(([identity, info2]) => ({
+    type: "library",
+    name: identity,
+    version: info2.version,
+    scope: devPackages.has(identity) ? "excluded" : "required",
+    purl: buildPurl(identity, info2.version, info2.url),
+    ...info2.url ? { externalReferences: [{ type: "vcs", url: info2.url }] } : {}
+  }));
+  const sbom = {
+    bomFormat: "CycloneDX",
+    specVersion: "1.6",
+    serialNumber: `urn:uuid:${(0, import_crypto.randomUUID)()}`,
+    version: 1,
+    metadata: {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      tools: [{ name: "xcode-packages-update", version: "1.0.0" }]
+    },
+    components
+  };
+  return JSON.stringify(sbom, null, 2);
+}
 
 // src/main.ts
 function findSharedScheme(workspaceFile, scheme) {
   const schemeFilename = `${scheme}.xcscheme`;
-  const workspaceSchemePath = import_path.default.join(workspaceFile, "xcshareddata", "xcschemes", schemeFilename);
+  const workspaceSchemePath = import_path2.default.join(workspaceFile, "xcshareddata", "xcschemes", schemeFilename);
   if (import_fs3.default.existsSync(workspaceSchemePath)) return workspaceSchemePath;
-  const contentsPath = import_path.default.join(workspaceFile, "contents.xcworkspacedata");
+  const contentsPath = import_path2.default.join(workspaceFile, "contents.xcworkspacedata");
   if (!import_fs3.default.existsSync(contentsPath)) return null;
   const contents = import_fs3.default.readFileSync(contentsPath, "utf8");
-  const workspaceDir = import_path.default.dirname(workspaceFile);
+  const workspaceDir = import_path2.default.dirname(workspaceFile);
   for (const [, ref] of contents.matchAll(/location\s*=\s*"container:([^"]+)"/g)) {
-    const projectSchemePath = import_path.default.join(workspaceDir, ref, "xcshareddata", "xcschemes", schemeFilename);
+    const projectSchemePath = import_path2.default.join(workspaceDir, ref, "xcshareddata", "xcschemes", schemeFilename);
     if (import_fs3.default.existsSync(projectSchemePath)) return projectSchemePath;
   }
   return null;
+}
+function parseDevPackages(input) {
+  return new Set(
+    input.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
+  );
+}
+function writeToPath(filePath, content) {
+  const dir = import_path2.default.dirname(import_path2.default.resolve(filePath));
+  import_fs3.default.mkdirSync(dir, { recursive: true });
+  import_fs3.default.writeFileSync(filePath, content, "utf8");
 }
 async function run() {
   const projectFile = getInput("project_file");
   const workspaceFile = getInput("workspace_file");
   const scheme = getInput("scheme");
   const tempDir = getInput("temporary_packages_dir_path");
+  const htmlReportPath = getInput("html_report_path");
+  const sbomPath = getInput("sbom_path");
+  const devPackagesInput = getInput("development_packages").trim();
   if (!projectFile && !workspaceFile) {
     throw new Error("Either project_file or workspace_file must be provided.");
   }
@@ -19877,7 +20239,7 @@ async function run() {
     }
   }
   const packageResolved = workspaceFile ? `${workspaceFile}/xcshareddata/swiftpm/Package.resolved` : `${projectFile}/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`;
-  const currentPackage = import_path.default.join(__dirname, "CurrentPackage.resolved");
+  const currentPackage = import_path2.default.join(__dirname, "CurrentPackage.resolved");
   import_fs3.default.rmSync(tempDir, { recursive: true, force: true });
   saveState("temp_dir", tempDir);
   saveState("current_package", currentPackage);
@@ -19904,6 +20266,24 @@ async function run() {
   const before = getPackages(currentPackage);
   const after = getPackages(packageResolved);
   const { removed, added, updated } = comparePackages(before, after);
+  if (htmlReportPath || sbomPath) {
+    const projectRoot = import_path2.default.resolve(projectFile ? import_path2.default.dirname(projectFile) : import_path2.default.dirname(workspaceFile));
+    const devPackages = devPackagesInput ? parseDevPackages(devPackagesInput) : detectDevPackages(packageResolved, projectRoot);
+    const beforeInfo = getPackagesWithInfo(currentPackage);
+    const afterInfo = getPackagesWithInfo(packageResolved);
+    if (htmlReportPath) {
+      const html = generateHtmlReport(beforeInfo, afterInfo, { removed, added, updated }, devPackages);
+      writeToPath(htmlReportPath, html);
+      setOutput("html_report_path", htmlReportPath);
+      info(`HTML dependency report written to ${htmlReportPath}`);
+    }
+    if (sbomPath) {
+      const sbom = generateSbom(afterInfo, devPackages);
+      writeToPath(sbomPath, sbom);
+      setOutput("sbom_path", sbomPath);
+      info(`CycloneDX SBOM written to ${sbomPath}`);
+    }
+  }
   import_fs3.default.rmSync(tempDir, { recursive: true, force: true });
   import_fs3.default.rmSync(currentPackage, { force: true });
   if (removed.length === 0 && added.length === 0 && updated.length === 0) {

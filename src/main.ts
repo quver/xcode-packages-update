@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import fs from 'fs';
 import path from 'path';
-import { getPackages, comparePackages } from './packages.js';
+import { getPackages, getPackagesWithInfo, comparePackages, generateHtmlReport, generateSbom, detectDevPackages } from './packages.js';
 
 function findSharedScheme(workspaceFile: string, scheme: string): string | null {
     const schemeFilename = `${scheme}.xcscheme`;
@@ -26,11 +26,29 @@ function findSharedScheme(workspaceFile: string, scheme: string): string | null 
     return null;
 }
 
+function parseDevPackages(input: string): Set<string> {
+    return new Set(
+        input
+            .split(/[\n,]/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+    );
+}
+
+function writeToPath(filePath: string, content: string): void {
+    const dir = path.dirname(path.resolve(filePath));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf8');
+}
+
 export async function run(): Promise<void> {
     const projectFile = core.getInput('project_file');
     const workspaceFile = core.getInput('workspace_file');
     const scheme = core.getInput('scheme');
     const tempDir = core.getInput('temporary_packages_dir_path');
+    const htmlReportPath = core.getInput('html_report_path');
+    const sbomPath = core.getInput('sbom_path');
+    const devPackagesInput = core.getInput('development_packages').trim();
 
     if (!projectFile && !workspaceFile) {
         throw new Error('Either project_file or workspace_file must be provided.');
@@ -101,6 +119,30 @@ export async function run(): Promise<void> {
     const before = getPackages(currentPackage);
     const after = getPackages(packageResolved);
     const { removed, added, updated } = comparePackages(before, after);
+
+    if (htmlReportPath || sbomPath) {
+        const projectRoot = path.resolve(projectFile ? path.dirname(projectFile) : path.dirname(workspaceFile));
+        const devPackages = devPackagesInput
+            ? parseDevPackages(devPackagesInput)
+            : detectDevPackages(packageResolved, projectRoot);
+
+        const beforeInfo = getPackagesWithInfo(currentPackage);
+        const afterInfo = getPackagesWithInfo(packageResolved);
+
+        if (htmlReportPath) {
+            const html = generateHtmlReport(beforeInfo, afterInfo, { removed, added, updated }, devPackages);
+            writeToPath(htmlReportPath, html);
+            core.setOutput('html_report_path', htmlReportPath);
+            core.info(`HTML dependency report written to ${htmlReportPath}`);
+        }
+
+        if (sbomPath) {
+            const sbom = generateSbom(afterInfo, devPackages);
+            writeToPath(sbomPath, sbom);
+            core.setOutput('sbom_path', sbomPath);
+            core.info(`CycloneDX SBOM written to ${sbomPath}`);
+        }
+    }
 
     fs.rmSync(tempDir, { recursive: true, force: true });
     fs.rmSync(currentPackage, { force: true });
