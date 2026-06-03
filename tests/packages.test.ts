@@ -155,9 +155,7 @@ describe('getPackagesWithInfo', () => {
     });
 
     test('uses empty string when location is missing', async () => {
-        mockReadFileSync.mockReturnValue(
-            JSON.stringify({ pins: [{ identity: 'pkg', state: { version: '1.0.0' } }] })
-        );
+        mockReadFileSync.mockReturnValue(JSON.stringify({ pins: [{ identity: 'pkg', state: { version: '1.0.0' } }] }));
 
         const getPackagesWithInfo = await loadGetPackagesWithInfo();
         const result = getPackagesWithInfo('Package.resolved');
@@ -888,7 +886,13 @@ describe('findPbxprojFiles existsSync true path', () => {
         mockReadFileSync.mockImplementation((p: string) => {
             if (String(p).endsWith('Package.resolved'))
                 return JSON.stringify({
-                    pins: [{ identity: 'swift-snapshot-testing', location: 'https://github.com/pointfreeco/swift-snapshot-testing', state: { version: '1.0.0' } }]
+                    pins: [
+                        {
+                            identity: 'swift-snapshot-testing',
+                            location: 'https://github.com/pointfreeco/swift-snapshot-testing',
+                            state: { version: '1.0.0' }
+                        }
+                    ]
                 });
             return pbxproj;
         });
@@ -909,7 +913,15 @@ describe('findPbxprojFiles existsSync true path', () => {
         mockExistsSync.mockReturnValue(false);
         mockReadFileSync.mockImplementation((p: string) => {
             if (String(p).endsWith('Package.resolved'))
-                return JSON.stringify({ pins: [{ identity: 'firebase-ios-sdk', location: 'https://github.com/firebase/firebase-ios-sdk', state: { version: '1.0.0' } }] });
+                return JSON.stringify({
+                    pins: [
+                        {
+                            identity: 'firebase-ios-sdk',
+                            location: 'https://github.com/firebase/firebase-ios-sdk',
+                            state: { version: '1.0.0' }
+                        }
+                    ]
+                });
             return '';
         });
 
