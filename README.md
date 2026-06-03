@@ -28,7 +28,7 @@ A GitHub Action that resolves Xcode Swift Package Manager dependencies and repor
 ```yaml
 - name: Resolve dependencies
   id: resolution
-  uses: quver/xcode-packages-update@v2
+  uses: quver/xcode-packages-update@v3
   with:
     project_file: 'MyApp.xcodeproj'
     html_report_path: 'artifacts/deps.html'
@@ -47,7 +47,7 @@ A GitHub Action that resolves Xcode Swift Package Manager dependencies and repor
 ```yaml
 - name: Resolve dependencies
   id: resolution
-  uses: quver/xcode-packages-update@v2
+  uses: quver/xcode-packages-update@v3
   with:
     workspace_file: 'MyApp.xcworkspace'
     scheme: 'MyApp'
@@ -81,7 +81,7 @@ jobs:
 
       - name: Resolve and report dependencies
         id: spm
-        uses: quver/xcode-packages-update@v2
+        uses: quver/xcode-packages-update@v3
         with:
           project_file: 'MyApp.xcodeproj'
           html_report_path: 'artifacts/deps.html'
@@ -189,7 +189,7 @@ If a package is classified as App in either source, App wins.
 Set `development_packages` to skip auto-detection entirely for that list:
 
 ```yaml
-- uses: quver/xcode-packages-update@v2
+- uses: quver/xcode-packages-update@v3
   with:
     project_file: 'MyApp.xcodeproj'
     html_report_path: 'artifacts/deps.html'
