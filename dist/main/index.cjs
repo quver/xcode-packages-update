@@ -20013,7 +20013,10 @@ function findPbxprojFiles(rootDir) {
   for (const entry of entries) {
     if (entry.isDirectory() && entry.name.endsWith(".xcodeproj")) {
       const candidate = import_path.default.join(rootDir, entry.name, "project.pbxproj");
-      if (import_fs2.default.existsSync(candidate)) results.push(candidate);
+      const pbxprojExists = import_fs2.default.existsSync(candidate);
+      if (pbxprojExists) {
+        results.push(candidate);
+      }
     }
   }
   return results;
