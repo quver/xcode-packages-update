@@ -3,14 +3,20 @@ import { comparePackages } from '../src/packages.js';
 import type { getPackages as GetPackagesFn, getPackagesWithInfo as GetPackagesWithInfoFn, generateHtmlReport as GenerateHtmlReportFn, generateSbom as GenerateSbomFn, detectXcodeDevPackages as DetectXcodeDevPackagesFn } from '../src/packages.js';
 
 let mockReadFileSync: ReturnType<typeof vi.fn>;
+let mockReaddirSync: ReturnType<typeof vi.fn>;
+let mockExistsSync: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
     mockReadFileSync = vi.fn();
+    mockReaddirSync = vi.fn().mockReturnValue([]);
+    mockExistsSync = vi.fn().mockReturnValue(false);
     vi.resetModules();
 
     vi.doMock('fs', () => ({
         default: {
-            readFileSync: mockReadFileSync
+            readFileSync: mockReadFileSync,
+            readdirSync: mockReaddirSync,
+            existsSync: mockExistsSync
         }
     }));
 });
@@ -400,9 +406,6 @@ describe('generateSbom', () => {
 });
 
 describe('detectDevPackages', () => {
-    let mockReaddirSync: ReturnType<typeof vi.fn>;
-    let mockExistsSync: ReturnType<typeof vi.fn>;
-
     async function loadDetectDevPackages(): Promise<typeof import('../src/packages.js').detectDevPackages> {
         const { detectDevPackages } = await import('../src/packages.js');
         return detectDevPackages;
@@ -411,14 +414,6 @@ describe('detectDevPackages', () => {
     beforeEach(() => {
         mockReaddirSync = vi.fn();
         mockExistsSync = vi.fn().mockReturnValue(false);
-        vi.resetModules();
-        vi.doMock('fs', () => ({
-            default: {
-                readFileSync: mockReadFileSync,
-                readdirSync: mockReaddirSync,
-                existsSync: mockExistsSync
-            }
-        }));
     });
 
     const makeResolved = (...identities: string[]) =>
@@ -551,24 +546,10 @@ describe('detectDevPackages', () => {
 });
 
 describe('detectXcodeDevPackages', () => {
-    let mockReadFileSyncLocal: ReturnType<typeof vi.fn>;
-
     async function loadDetectXcodeDevPackages(): Promise<typeof DetectXcodeDevPackagesFn> {
         const { detectXcodeDevPackages } = await import('../src/packages.js');
         return detectXcodeDevPackages;
     }
-
-    beforeEach(() => {
-        mockReadFileSyncLocal = vi.fn();
-        vi.resetModules();
-        vi.doMock('fs', () => ({
-            default: {
-                readFileSync: mockReadFileSyncLocal,
-                readdirSync: vi.fn().mockReturnValue([]),
-                existsSync: vi.fn().mockReturnValue(false)
-            }
-        }));
-    });
 
     const SNAPSHOT_REF_ID = 'AAAAAAAAAAAAAAAAAAAAAAAA';
     const SNAPSHOT_DEP_ID = 'BBBBBBBBBBBBBBBBBBBBBBBB';
@@ -612,7 +593,7 @@ describe('detectXcodeDevPackages', () => {
             productDeps: [{ id: SNAPSHOT_DEP_ID, product: 'SnapshotTesting', pkgRefId: SNAPSHOT_REF_ID }],
             targets: [{ name: 'FuturumTests', depIds: [SNAPSHOT_DEP_ID] }]
         });
-        mockReadFileSyncLocal.mockReturnValue(pbxproj);
+        mockReadFileSync.mockReturnValue(pbxproj);
 
         const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
         const { devRefs, appRefs } = detectXcodeDevPackages('project.pbxproj');
@@ -627,7 +608,7 @@ describe('detectXcodeDevPackages', () => {
             productDeps: [],
             targets: []
         });
-        mockReadFileSyncLocal.mockReturnValue(pbxproj);
+        mockReadFileSync.mockReturnValue(pbxproj);
 
         const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
         const { devRefs, appRefs } = detectXcodeDevPackages('project.pbxproj');
@@ -642,7 +623,7 @@ describe('detectXcodeDevPackages', () => {
             productDeps: [{ id: FIREBASE_DEP_ID, product: 'Firebase', pkgRefId: FIREBASE_REF_ID }],
             targets: [{ name: 'Futurum', depIds: [FIREBASE_DEP_ID] }]
         });
-        mockReadFileSyncLocal.mockReturnValue(pbxproj);
+        mockReadFileSync.mockReturnValue(pbxproj);
 
         const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
         const { devRefs, appRefs } = detectXcodeDevPackages('project.pbxproj');
@@ -664,16 +645,16 @@ describe('detectXcodeDevPackages', () => {
                 { name: 'FuturumTests', depIds: [DEP_ID_2] }
             ]
         });
-        mockReadFileSyncLocal.mockReturnValue(pbxproj);
+        mockReadFileSync.mockReturnValue(pbxproj);
 
         const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
-        const { devRefs, appRefs } = detectXcodeDevPackages('project.pbxproj');
+        const { appRefs } = detectXcodeDevPackages('project.pbxproj');
 
         expect(appRefs.has('swift-snapshot-testing')).toBe(true);
     });
 
     test('returns empty sets when file cannot be read', async () => {
-        mockReadFileSyncLocal.mockImplementation(() => { throw new Error('ENOENT'); });
+        mockReadFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
 
         const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
         const { devRefs, appRefs } = detectXcodeDevPackages('missing.pbxproj');
@@ -688,7 +669,7 @@ describe('detectXcodeDevPackages', () => {
             productDeps: [],
             targets: []
         });
-        mockReadFileSyncLocal.mockReturnValue(pbxproj);
+        mockReadFileSync.mockReturnValue(pbxproj);
 
         const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
         const { devRefs } = detectXcodeDevPackages('project.pbxproj');
