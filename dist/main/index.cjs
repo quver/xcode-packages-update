@@ -14714,7 +14714,7 @@ var require_util4 = __commonJS({
     var { getEncoding } = require_encoding();
     var { serializeAMimeType, parseMIMEType } = require_data_url();
     var { types } = require("node:util");
-    var { StringDecoder } = require("string_decoder");
+    var { StringDecoder: StringDecoder2 } = require("string_decoder");
     var { btoa } = require("node:buffer");
     var staticPropertyDescriptors = {
       enumerable: true,
@@ -14805,7 +14805,7 @@ var require_util4 = __commonJS({
             dataURL += serializeAMimeType(parsed);
           }
           dataURL += ";base64,";
-          const decoder = new StringDecoder("latin1");
+          const decoder = new StringDecoder2("latin1");
           for (const chunk of bytes) {
             dataURL += btoa(decoder.write(chunk));
           }
@@ -14834,7 +14834,7 @@ var require_util4 = __commonJS({
         }
         case "BinaryString": {
           let binaryString = "";
-          const decoder = new StringDecoder("latin1");
+          const decoder = new StringDecoder2("latin1");
           for (const chunk of bytes) {
             binaryString += decoder.write(chunk);
           }
@@ -19110,6 +19110,9 @@ var _summary = new Summary();
 // node_modules/@actions/core/lib/platform.js
 var import_os2 = __toESM(require("os"), 1);
 
+// node_modules/@actions/exec/lib/exec.js
+var import_string_decoder = require("string_decoder");
+
 // node_modules/@actions/exec/lib/toolrunner.js
 var os3 = __toESM(require("os"), 1);
 var events = __toESM(require("events"), 1);
@@ -19824,6 +19827,38 @@ function exec(commandLine, args, options) {
     return runner.exec();
   });
 }
+function getExecOutput(commandLine, args, options) {
+  return __awaiter5(this, void 0, void 0, function* () {
+    var _a, _b;
+    let stdout = "";
+    let stderr = "";
+    const stdoutDecoder = new import_string_decoder.StringDecoder("utf8");
+    const stderrDecoder = new import_string_decoder.StringDecoder("utf8");
+    const originalStdoutListener = (_a = options === null || options === void 0 ? void 0 : options.listeners) === null || _a === void 0 ? void 0 : _a.stdout;
+    const originalStdErrListener = (_b = options === null || options === void 0 ? void 0 : options.listeners) === null || _b === void 0 ? void 0 : _b.stderr;
+    const stdErrListener = (data) => {
+      stderr += stderrDecoder.write(data);
+      if (originalStdErrListener) {
+        originalStdErrListener(data);
+      }
+    };
+    const stdOutListener = (data) => {
+      stdout += stdoutDecoder.write(data);
+      if (originalStdoutListener) {
+        originalStdoutListener(data);
+      }
+    };
+    const listeners = Object.assign(Object.assign({}, options === null || options === void 0 ? void 0 : options.listeners), { stdout: stdOutListener, stderr: stdErrListener });
+    const exitCode = yield exec(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
+    stdout += stdoutDecoder.end();
+    stderr += stderrDecoder.end();
+    return {
+      exitCode,
+      stdout,
+      stderr
+    };
+  });
+}
 
 // node_modules/@actions/core/lib/platform.js
 var platform = import_os2.default.platform();
@@ -19905,6 +19940,39 @@ function getPackagesWithInfo(filePath) {
       }
     ])
   );
+}
+function compareVersionParts(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+function selectLatestStableVersion(tags) {
+  let best = null;
+  for (const raw of tags) {
+    const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(raw.trim());
+    if (!match) continue;
+    const parts = [Number(match[1]), Number(match[2]), Number(match[3])];
+    if (!best || compareVersionParts(parts, best) > 0) {
+      best = parts;
+    }
+  }
+  return best ? best.join(".") : "";
+}
+async function getLatestVersions(afterInfo, runGit) {
+  const entries = [...afterInfo.entries()].filter(([, info2]) => info2.url);
+  const results = await Promise.all(
+    entries.map(async ([identity, info2]) => {
+      try {
+        const stdout = await runGit("git", ["ls-remote", "--tags", "--refs", info2.url]);
+        const tags = stdout.split("\n").map((line) => line.slice(line.lastIndexOf("/") + 1).trim()).filter(Boolean);
+        return [identity, selectLatestStableVersion(tags)];
+      } catch {
+        return [identity, ""];
+      }
+    })
+  );
+  return new Map(results.filter(([, version]) => version));
 }
 function comparePackages(before, after) {
   const removed = [...before.keys()].filter((k) => !after.has(k));
@@ -20055,6 +20123,91 @@ function detectDevPackages(resolvedFilePath, projectRoot) {
   }
   return result;
 }
+function manifestPackageDeps(content) {
+  const deps = [];
+  for (const block of extractBlocks(content, "package")) {
+    const match = /url:\s*"([^"]+)"/.exec(block);
+    if (match) deps.push(identityFromUrl(match[1]));
+  }
+  return deps;
+}
+function getDirectDependencies(resolvedSet, projectRoot) {
+  const direct = /* @__PURE__ */ new Set();
+  for (const filePath of findPackageSwiftFiles(projectRoot)) {
+    let content;
+    try {
+      content = import_fs2.default.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    for (const ref of manifestPackageDeps(content)) {
+      if (resolvedSet.has(ref)) direct.add(ref);
+    }
+  }
+  for (const pbxprojPath of findPbxprojFiles(projectRoot)) {
+    const { devRefs, appRefs } = detectXcodeDevPackages(pbxprojPath);
+    for (const ref of [...devRefs, ...appRefs]) {
+      if (resolvedSet.has(ref)) direct.add(ref);
+    }
+  }
+  return direct;
+}
+function getDependencyEdges(checkoutsDir, resolvedSet) {
+  const edges = /* @__PURE__ */ new Map();
+  let entries;
+  try {
+    entries = import_fs2.default.readdirSync(checkoutsDir, { withFileTypes: true });
+  } catch {
+    return edges;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const identity = entry.name.toLowerCase();
+    if (!resolvedSet.has(identity)) continue;
+    let content;
+    try {
+      content = import_fs2.default.readFileSync(import_path.default.join(checkoutsDir, entry.name, "Package.swift"), "utf8");
+    } catch {
+      continue;
+    }
+    const children = [...new Set(manifestPackageDeps(content))].filter(
+      (child2) => child2 !== identity && resolvedSet.has(child2)
+    );
+    if (children.length > 0) edges.set(identity, children);
+  }
+  return edges;
+}
+function escapeMermaidLabel(label) {
+  return label.replace(/"/g, "'");
+}
+function generateMermaidGraph(afterInfo, directDeps, edges) {
+  const identities = [...afterInfo.keys()].sort();
+  if (identities.length === 0) return "";
+  const nodeId = /* @__PURE__ */ new Map();
+  identities.forEach((identity, index) => nodeId.set(identity, `n${index}`));
+  const lines = ["flowchart TD"];
+  for (const identity of identities) {
+    const version = afterInfo.get(identity).version;
+    const label = version ? `${identity} ${version}` : identity;
+    const tag = directDeps.has(identity) ? ":::direct" : "";
+    lines.push(`  ${nodeId.get(identity)}["${escapeMermaidLabel(label)}"]${tag}`);
+  }
+  for (const identity of identities) {
+    for (const child2 of edges.get(identity) ?? []) {
+      if (nodeId.has(child2)) {
+        lines.push(`  ${nodeId.get(identity)} --> ${nodeId.get(child2)}`);
+      }
+    }
+  }
+  lines.push("  classDef direct fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;");
+  return lines.join("\n");
+}
+function buildDependencyGraph(afterInfo, projectRoot, checkoutsDir) {
+  const resolvedSet = new Set(afterInfo.keys());
+  const directDeps = getDirectDependencies(resolvedSet, projectRoot);
+  const edges = getDependencyEdges(checkoutsDir, resolvedSet);
+  return generateMermaidGraph(afterInfo, directDeps, edges);
+}
 var HTML_STYLES = `
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1d1d1f; }
   h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
@@ -20076,6 +20229,9 @@ var HTML_STYLES = `
   a { color: #0071e3; text-decoration: none; }
   a:hover { text-decoration: underline; }
   .version-arrow { color: #6e6e73; margin: 0 4px; }
+  h2 { font-size: 1.2rem; margin-top: 2.5rem; margin-bottom: 0.25rem; }
+  .graph-legend { font-size: 0.8rem; color: #6e6e73; margin-bottom: 0.75rem; }
+  pre.mermaid { background: #fff; line-height: 1.4; }
 `.trim();
 function typeBadge(identity, devPackages) {
   return devPackages.has(identity) ? '<span class="badge badge-dev">\u{1F6E0} Development</span>' : '<span class="badge badge-app">\u{1F4E6} App</span>';
@@ -20096,11 +20252,15 @@ function versionCell(identity, beforeInfo, afterInfo, compare) {
   const beforeVersion = beforeInfo.get(identity)?.version ?? "";
   const afterVersion = afterInfo.get(identity)?.version ?? "";
   if (compare.updated.includes(identity) && beforeVersion && afterVersion && beforeVersion !== afterVersion) {
-    return `${beforeVersion}<span class="version-arrow">\u2192</span>${afterVersion}`;
+    return `${escapeHtml(beforeVersion)}<span class="version-arrow">\u2192</span>${escapeHtml(afterVersion)}`;
   }
-  return afterVersion || beforeVersion;
+  return escapeHtml(afterVersion || beforeVersion);
 }
-function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__PURE__ */ new Set()) {
+function latestCell(identity, latest) {
+  const version = latest.get(identity);
+  return version ? `<code>${escapeHtml(version)}</code>` : "\u2014";
+}
+function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__PURE__ */ new Set(), latest = /* @__PURE__ */ new Map(), mermaid = "") {
   const allIdentities = [.../* @__PURE__ */ new Set([...beforeInfo.keys(), ...afterInfo.keys()])].sort();
   const rows = allIdentities.map((identity) => {
     const info2 = afterInfo.get(identity) ?? beforeInfo.get(identity);
@@ -20108,7 +20268,8 @@ function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__
     return [
       `<tr${rowClass(identity, compare)}>`,
       `  <td>${urlCell}</td>`,
-      `  <td><code>${escapeHtml(versionCell(identity, beforeInfo, afterInfo, compare))}</code></td>`,
+      `  <td><code>${versionCell(identity, beforeInfo, afterInfo, compare)}</code></td>`,
+      `  <td>${latestCell(identity, latest)}</td>`,
       `  <td>${typeBadge(identity, devPackages)}</td>`,
       `  <td>${changeBadge(identity, compare)}</td>`,
       `</tr>`
@@ -20119,6 +20280,15 @@ function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__
   const removed = compare.removed.length;
   const updated = compare.updated.length;
   const generated = (/* @__PURE__ */ new Date()).toUTCString();
+  const mermaidScript = mermaid ? `<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true });
+</script>` : "";
+  const graphSection = mermaid ? `<h2>Dependency graph</h2>
+<div class="graph-legend">Highlighted nodes are your direct dependencies; the rest are pulled in transitively.</div>
+<pre class="mermaid">
+${escapeHtml(mermaid)}
+</pre>` : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20126,6 +20296,7 @@ function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Swift Package Dependencies</title>
 <style>${HTML_STYLES}</style>
+${mermaidScript}
 </head>
 <body>
 <h1>Swift Package Dependencies</h1>
@@ -20141,6 +20312,7 @@ function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__
   <tr>
     <th>Package</th>
     <th>Version</th>
+    <th>Latest available</th>
     <th>Type</th>
     <th>Change</th>
   </tr>
@@ -20149,6 +20321,7 @@ function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__
 ${rows}
 </tbody>
 </table>
+${graphSection}
 </body>
 </html>`;
 }
@@ -20281,7 +20454,23 @@ async function run() {
     const beforeInfo = getPackagesWithInfo(currentPackage);
     const afterInfo = getPackagesWithInfo(packageResolved);
     if (htmlReportPath) {
-      const html = generateHtmlReport(beforeInfo, afterInfo, { removed, added, updated }, devPackages);
+      const runGit = async (command, args) => {
+        const { stdout } = await getExecOutput(command, args, {
+          silent: true,
+          ignoreReturnCode: true
+        });
+        return stdout;
+      };
+      const latest = await getLatestVersions(afterInfo, runGit);
+      const mermaid = buildDependencyGraph(afterInfo, projectRoot, import_path2.default.join(tempDir, "checkouts"));
+      const html = generateHtmlReport(
+        beforeInfo,
+        afterInfo,
+        { removed, added, updated },
+        devPackages,
+        latest,
+        mermaid
+      );
       writeToPath(htmlReportPath, html);
       setOutput("html_report_path", htmlReportPath);
       info(`HTML dependency report written to ${htmlReportPath}`);

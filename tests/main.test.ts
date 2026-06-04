@@ -8,6 +8,7 @@ let mockInfo: ReturnType<typeof vi.fn>;
 let mockWarning: ReturnType<typeof vi.fn>;
 let mockSetFailed: ReturnType<typeof vi.fn>;
 let mockExec: ReturnType<typeof vi.fn>;
+let mockGetExecOutput: ReturnType<typeof vi.fn>;
 let mockRmSync: ReturnType<typeof vi.fn>;
 let mockRenameSync: ReturnType<typeof vi.fn>;
 let mockMkdirSync: ReturnType<typeof vi.fn>;
@@ -19,6 +20,8 @@ let mockComparePackages: ReturnType<typeof vi.fn>;
 let mockGenerateHtmlReport: ReturnType<typeof vi.fn>;
 let mockGenerateSbom: ReturnType<typeof vi.fn>;
 let mockDetectDevPackages: ReturnType<typeof vi.fn>;
+let mockGetLatestVersions: ReturnType<typeof vi.fn>;
+let mockBuildDependencyGraph: ReturnType<typeof vi.fn>;
 let mockWriteFileSync: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -29,6 +32,7 @@ beforeEach(() => {
     mockWarning = vi.fn();
     mockSetFailed = vi.fn();
     mockExec = vi.fn().mockResolvedValue(0);
+    mockGetExecOutput = vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
     mockRmSync = vi.fn();
     mockRenameSync = vi.fn();
     mockMkdirSync = vi.fn();
@@ -40,6 +44,8 @@ beforeEach(() => {
     mockGenerateHtmlReport = vi.fn().mockReturnValue('<html></html>');
     mockGenerateSbom = vi.fn().mockReturnValue('{}');
     mockDetectDevPackages = vi.fn().mockReturnValue(new Set());
+    mockGetLatestVersions = vi.fn().mockResolvedValue(new Map());
+    mockBuildDependencyGraph = vi.fn().mockReturnValue('');
     mockWriteFileSync = vi.fn();
     vi.resetModules();
 
@@ -53,7 +59,8 @@ beforeEach(() => {
     }));
 
     vi.doMock('@actions/exec', () => ({
-        exec: mockExec
+        exec: mockExec,
+        getExecOutput: mockGetExecOutput
     }));
 
     vi.doMock('fs', () => ({
@@ -73,7 +80,9 @@ beforeEach(() => {
         comparePackages: mockComparePackages,
         generateHtmlReport: mockGenerateHtmlReport,
         generateSbom: mockGenerateSbom,
-        detectDevPackages: mockDetectDevPackages
+        detectDevPackages: mockDetectDevPackages,
+        getLatestVersions: mockGetLatestVersions,
+        buildDependencyGraph: mockBuildDependencyGraph
     }));
 
     mockGetInput.mockImplementation((name: string) => {
@@ -406,6 +415,79 @@ describe('html report generation', () => {
 
         expect(mockGenerateHtmlReport).not.toHaveBeenCalled();
         expect(mockSetOutput).not.toHaveBeenCalledWith('html_report_path', expect.anything());
+    });
+
+    test('passes latest available versions to generateHtmlReport', async () => {
+        const latest = new Map([['firebase', '12.5.0']]);
+        mockGetLatestVersions.mockResolvedValue(latest);
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'reports/deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockGetLatestVersions).toHaveBeenCalled();
+        expect(mockGenerateHtmlReport.mock.calls[0][4]).toBe(latest);
+    });
+
+    test('does not fetch latest versions when html_report_path not set', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockGetLatestVersions).not.toHaveBeenCalled();
+    });
+
+    test('builds the dependency graph and passes it to generateHtmlReport', async () => {
+        mockBuildDependencyGraph.mockReturnValue('flowchart TD\n  n0["firebase"]');
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'reports/deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockBuildDependencyGraph).toHaveBeenCalledWith(
+            expect.any(Map),
+            expect.any(String),
+            expect.stringContaining('checkouts')
+        );
+        expect(mockGenerateHtmlReport.mock.calls[0][5]).toBe('flowchart TD\n  n0["firebase"]');
+    });
+
+    test('does not build the dependency graph when html_report_path not set', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockBuildDependencyGraph).not.toHaveBeenCalled();
+    });
+
+    test('runGit closure fetches tags through exec.getExecOutput', async () => {
+        mockGetLatestVersions.mockImplementation(async (_afterInfo, runGit) => {
+            await runGit('git', ['ls-remote', '--tags', '--refs', 'https://example.com/repo']);
+            return new Map();
+        });
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'reports/deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockGetExecOutput).toHaveBeenCalledWith(
+            'git',
+            ['ls-remote', '--tags', '--refs', 'https://example.com/repo'],
+            { silent: true, ignoreReturnCode: true }
+        );
     });
 
     test('passes development packages set to generateHtmlReport', async () => {
