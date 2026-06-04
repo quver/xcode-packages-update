@@ -47,6 +47,16 @@ async function loadGenerateSbom(): Promise<typeof GenerateSbomFn> {
     return generateSbom;
 }
 
+async function loadSelectLatestStableVersion(): Promise<typeof import('../src/packages.js').selectLatestStableVersion> {
+    const { selectLatestStableVersion } = await import('../src/packages.js');
+    return selectLatestStableVersion;
+}
+
+async function loadGetLatestVersions(): Promise<typeof import('../src/packages.js').getLatestVersions> {
+    const { getLatestVersions } = await import('../src/packages.js');
+    return getLatestVersions;
+}
+
 describe('getPackages', () => {
     test('parses version from pins', async () => {
         mockReadFileSync.mockReturnValue(
@@ -373,6 +383,118 @@ describe('generateHtmlReport', () => {
         expect(html).toContain('<!DOCTYPE html>');
         expect(html).toContain('<table>');
         expect(html).toContain('</table>');
+    });
+
+    test('includes a Latest available column header', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+
+        const html = generateHtmlReport(new Map(), new Map(), { removed: [], added: [], updated: [] });
+
+        expect(html).toContain('<th>Latest available</th>');
+    });
+
+    test('renders the highest available version when provided', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+        const info = new Map([['firebase', makeInfo('11.0.0')]]);
+        const latest = new Map([['firebase', '12.5.0']]);
+
+        const html = generateHtmlReport(info, info, { removed: [], added: [], updated: [] }, new Set(), latest);
+
+        expect(html).toContain('12.5.0');
+    });
+
+    test('renders a dash when the latest version is unknown', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+        const info = new Map([['firebase', makeInfo('11.0.0')]]);
+
+        const html = generateHtmlReport(info, info, { removed: [], added: [], updated: [] });
+
+        expect(html).toContain('—');
+    });
+});
+
+describe('selectLatestStableVersion', () => {
+    test('returns the highest stable version', async () => {
+        const selectLatestStableVersion = await loadSelectLatestStableVersion();
+
+        expect(selectLatestStableVersion(['1.0.0', '1.2.0', '1.1.5'])).toBe('1.2.0');
+    });
+
+    test('strips a leading v prefix', async () => {
+        const selectLatestStableVersion = await loadSelectLatestStableVersion();
+
+        expect(selectLatestStableVersion(['v2.0.0', 'v1.0.0'])).toBe('2.0.0');
+    });
+
+    test('ignores pre-release and non-semver tags', async () => {
+        const selectLatestStableVersion = await loadSelectLatestStableVersion();
+
+        expect(selectLatestStableVersion(['1.0.0', '2.0.0-beta', 'nightly', '1.5.0'])).toBe('1.5.0');
+    });
+
+    test('compares numerically rather than lexicographically', async () => {
+        const selectLatestStableVersion = await loadSelectLatestStableVersion();
+
+        expect(selectLatestStableVersion(['9.0.0', '10.0.0'])).toBe('10.0.0');
+    });
+
+    test('returns empty string when no stable version exists', async () => {
+        const selectLatestStableVersion = await loadSelectLatestStableVersion();
+
+        expect(selectLatestStableVersion(['main', '1.0.0-rc1'])).toBe('');
+    });
+});
+
+describe('getLatestVersions', () => {
+    const makeInfo = (version: string, url = 'https://github.com/org/repo') => ({ version, url });
+
+    test('returns the highest tag for each package from git ls-remote', async () => {
+        const getLatestVersions = await loadGetLatestVersions();
+        const afterInfo = new Map([['firebase', makeInfo('11.0.0', 'https://github.com/firebase/firebase-ios-sdk')]]);
+        const runGit = vi
+            .fn()
+            .mockResolvedValue(['abc\trefs/tags/11.0.0', 'def\trefs/tags/12.5.0', 'ghi\trefs/tags/12.4.0'].join('\n'));
+
+        const result = await getLatestVersions(afterInfo, runGit);
+
+        expect(runGit).toHaveBeenCalledWith('git', [
+            'ls-remote',
+            '--tags',
+            '--refs',
+            'https://github.com/firebase/firebase-ios-sdk'
+        ]);
+        expect(result.get('firebase')).toBe('12.5.0');
+    });
+
+    test('skips packages without a url', async () => {
+        const getLatestVersions = await loadGetLatestVersions();
+        const afterInfo = new Map([['no-url', makeInfo('1.0.0', '')]]);
+        const runGit = vi.fn();
+
+        const result = await getLatestVersions(afterInfo, runGit);
+
+        expect(runGit).not.toHaveBeenCalled();
+        expect(result.size).toBe(0);
+    });
+
+    test('omits packages whose tags cannot be fetched', async () => {
+        const getLatestVersions = await loadGetLatestVersions();
+        const afterInfo = new Map([['firebase', makeInfo('11.0.0')]]);
+        const runGit = vi.fn().mockRejectedValue(new Error('network error'));
+
+        const result = await getLatestVersions(afterInfo, runGit);
+
+        expect(result.has('firebase')).toBe(false);
+    });
+
+    test('omits packages with no stable tags', async () => {
+        const getLatestVersions = await loadGetLatestVersions();
+        const afterInfo = new Map([['firebase', makeInfo('11.0.0')]]);
+        const runGit = vi.fn().mockResolvedValue('abc\trefs/tags/1.0.0-beta\ndef\trefs/tags/nightly');
+
+        const result = await getLatestVersions(afterInfo, runGit);
+
+        expect(result.has('firebase')).toBe(false);
     });
 });
 

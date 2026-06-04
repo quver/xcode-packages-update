@@ -55,6 +55,67 @@ export interface CompareResult {
     updated: string[];
 }
 
+// ─── Latest available version ────────────────────────────────────────────────
+
+/** Runs a command and returns its stdout. Mirrors @actions/exec output. */
+export type ExecFn = (command: string, args: string[]) => Promise<string>;
+
+function compareVersionParts(a: number[], b: number[]): number {
+    for (let i = 0; i < 3; i++) {
+        if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return 0;
+}
+
+/**
+ * Picks the highest stable semantic version from a list of git tags.
+ * Pre-release tags (e.g. `1.0.0-beta`) and non-semver tags are ignored.
+ * Returns the version without a leading `v`, or '' when no stable tag exists.
+ */
+export function selectLatestStableVersion(tags: string[]): string {
+    let best: number[] | null = null;
+
+    for (const raw of tags) {
+        const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(raw.trim());
+        if (!match) continue;
+
+        const parts = [Number(match[1]), Number(match[2]), Number(match[3])];
+        if (!best || compareVersionParts(parts, best) > 0) {
+            best = parts;
+        }
+    }
+
+    return best ? best.join('.') : '';
+}
+
+/**
+ * Resolves the highest available version for each package by reading its git tags
+ * via `git ls-remote`. Packages without a URL or without reachable tags are skipped.
+ */
+export async function getLatestVersions(
+    afterInfo: Map<string, PackageInfo>,
+    runGit: ExecFn
+): Promise<Map<string, string>> {
+    const entries = [...afterInfo.entries()].filter(([, info]) => info.url);
+
+    const results = await Promise.all(
+        entries.map(async ([identity, info]) => {
+            try {
+                const stdout = await runGit('git', ['ls-remote', '--tags', '--refs', info.url]);
+                const tags = stdout
+                    .split('\n')
+                    .map((line) => line.split('/').pop()?.trim() ?? '')
+                    .filter(Boolean);
+                return [identity, selectLatestStableVersion(tags)] as const;
+            } catch {
+                return [identity, ''] as const;
+            }
+        })
+    );
+
+    return new Map(results.filter(([, version]) => version));
+}
+
 export function comparePackages(before: Map<string, string>, after: Map<string, string>): CompareResult {
     const removed = [...before.keys()].filter((k) => !after.has(k));
     const added = [...after.keys()].filter((k) => !before.has(k));
@@ -331,11 +392,17 @@ function versionCell(
     return afterVersion || beforeVersion;
 }
 
+function latestCell(identity: string, latest: Map<string, string>): string {
+    const version = latest.get(identity);
+    return version ? `<code>${escapeHtml(version)}</code>` : '—';
+}
+
 export function generateHtmlReport(
     beforeInfo: Map<string, PackageInfo>,
     afterInfo: Map<string, PackageInfo>,
     compare: CompareResult,
-    devPackages: Set<string> = new Set()
+    devPackages: Set<string> = new Set(),
+    latest: Map<string, string> = new Map()
 ): string {
     const allIdentities = [...new Set([...beforeInfo.keys(), ...afterInfo.keys()])].sort();
 
@@ -350,6 +417,7 @@ export function generateHtmlReport(
                 `<tr${rowClass(identity, compare)}>`,
                 `  <td>${urlCell}</td>`,
                 `  <td><code>${escapeHtml(versionCell(identity, beforeInfo, afterInfo, compare))}</code></td>`,
+                `  <td>${latestCell(identity, latest)}</td>`,
                 `  <td>${typeBadge(identity, devPackages)}</td>`,
                 `  <td>${changeBadge(identity, compare)}</td>`,
                 `</tr>`
@@ -385,6 +453,7 @@ export function generateHtmlReport(
   <tr>
     <th>Package</th>
     <th>Version</th>
+    <th>Latest available</th>
     <th>Type</th>
     <th>Change</th>
   </tr>

@@ -8,7 +8,8 @@ import {
     comparePackages,
     generateHtmlReport,
     generateSbom,
-    detectDevPackages
+    detectDevPackages,
+    getLatestVersions
 } from './packages.js';
 
 function findSharedScheme(workspaceFile: string, scheme: string): string | null {
@@ -137,7 +138,15 @@ export async function run(): Promise<void> {
         const afterInfo = getPackagesWithInfo(packageResolved);
 
         if (htmlReportPath) {
-            const html = generateHtmlReport(beforeInfo, afterInfo, { removed, added, updated }, devPackages);
+            const runGit = async (command: string, args: string[]): Promise<string> => {
+                const { stdout } = await exec.getExecOutput(command, args, {
+                    silent: true,
+                    ignoreReturnCode: true
+                });
+                return stdout;
+            };
+            const latest = await getLatestVersions(afterInfo, runGit);
+            const html = generateHtmlReport(beforeInfo, afterInfo, { removed, added, updated }, devPackages, latest);
             writeToPath(htmlReportPath, html);
             core.setOutput('html_report_path', htmlReportPath);
             core.info(`HTML dependency report written to ${htmlReportPath}`);

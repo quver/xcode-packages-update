@@ -14714,7 +14714,7 @@ var require_util4 = __commonJS({
     var { getEncoding } = require_encoding();
     var { serializeAMimeType, parseMIMEType } = require_data_url();
     var { types } = require("node:util");
-    var { StringDecoder } = require("string_decoder");
+    var { StringDecoder: StringDecoder2 } = require("string_decoder");
     var { btoa } = require("node:buffer");
     var staticPropertyDescriptors = {
       enumerable: true,
@@ -14805,7 +14805,7 @@ var require_util4 = __commonJS({
             dataURL += serializeAMimeType(parsed);
           }
           dataURL += ";base64,";
-          const decoder = new StringDecoder("latin1");
+          const decoder = new StringDecoder2("latin1");
           for (const chunk of bytes) {
             dataURL += btoa(decoder.write(chunk));
           }
@@ -14834,7 +14834,7 @@ var require_util4 = __commonJS({
         }
         case "BinaryString": {
           let binaryString = "";
-          const decoder = new StringDecoder("latin1");
+          const decoder = new StringDecoder2("latin1");
           for (const chunk of bytes) {
             binaryString += decoder.write(chunk);
           }
@@ -19110,6 +19110,9 @@ var _summary = new Summary();
 // node_modules/@actions/core/lib/platform.js
 var import_os2 = __toESM(require("os"), 1);
 
+// node_modules/@actions/exec/lib/exec.js
+var import_string_decoder = require("string_decoder");
+
 // node_modules/@actions/exec/lib/toolrunner.js
 var os3 = __toESM(require("os"), 1);
 var events = __toESM(require("events"), 1);
@@ -19824,6 +19827,38 @@ function exec(commandLine, args, options) {
     return runner.exec();
   });
 }
+function getExecOutput(commandLine, args, options) {
+  return __awaiter5(this, void 0, void 0, function* () {
+    var _a, _b;
+    let stdout = "";
+    let stderr = "";
+    const stdoutDecoder = new import_string_decoder.StringDecoder("utf8");
+    const stderrDecoder = new import_string_decoder.StringDecoder("utf8");
+    const originalStdoutListener = (_a = options === null || options === void 0 ? void 0 : options.listeners) === null || _a === void 0 ? void 0 : _a.stdout;
+    const originalStdErrListener = (_b = options === null || options === void 0 ? void 0 : options.listeners) === null || _b === void 0 ? void 0 : _b.stderr;
+    const stdErrListener = (data) => {
+      stderr += stderrDecoder.write(data);
+      if (originalStdErrListener) {
+        originalStdErrListener(data);
+      }
+    };
+    const stdOutListener = (data) => {
+      stdout += stdoutDecoder.write(data);
+      if (originalStdoutListener) {
+        originalStdoutListener(data);
+      }
+    };
+    const listeners = Object.assign(Object.assign({}, options === null || options === void 0 ? void 0 : options.listeners), { stdout: stdOutListener, stderr: stdErrListener });
+    const exitCode = yield exec(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
+    stdout += stdoutDecoder.end();
+    stderr += stderrDecoder.end();
+    return {
+      exitCode,
+      stdout,
+      stderr
+    };
+  });
+}
 
 // node_modules/@actions/core/lib/platform.js
 var platform = import_os2.default.platform();
@@ -19905,6 +19940,39 @@ function getPackagesWithInfo(filePath) {
       }
     ])
   );
+}
+function compareVersionParts(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+function selectLatestStableVersion(tags) {
+  let best = null;
+  for (const raw of tags) {
+    const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(raw.trim());
+    if (!match) continue;
+    const parts = [Number(match[1]), Number(match[2]), Number(match[3])];
+    if (!best || compareVersionParts(parts, best) > 0) {
+      best = parts;
+    }
+  }
+  return best ? best.join(".") : "";
+}
+async function getLatestVersions(afterInfo, runGit) {
+  const entries = [...afterInfo.entries()].filter(([, info2]) => info2.url);
+  const results = await Promise.all(
+    entries.map(async ([identity, info2]) => {
+      try {
+        const stdout = await runGit("git", ["ls-remote", "--tags", "--refs", info2.url]);
+        const tags = stdout.split("\n").map((line) => line.split("/").pop()?.trim() ?? "").filter(Boolean);
+        return [identity, selectLatestStableVersion(tags)];
+      } catch {
+        return [identity, ""];
+      }
+    })
+  );
+  return new Map(results.filter(([, version]) => version));
 }
 function comparePackages(before, after) {
   const removed = [...before.keys()].filter((k) => !after.has(k));
@@ -20100,7 +20168,11 @@ function versionCell(identity, beforeInfo, afterInfo, compare) {
   }
   return afterVersion || beforeVersion;
 }
-function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__PURE__ */ new Set()) {
+function latestCell(identity, latest) {
+  const version = latest.get(identity);
+  return version ? `<code>${escapeHtml(version)}</code>` : "\u2014";
+}
+function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__PURE__ */ new Set(), latest = /* @__PURE__ */ new Map()) {
   const allIdentities = [.../* @__PURE__ */ new Set([...beforeInfo.keys(), ...afterInfo.keys()])].sort();
   const rows = allIdentities.map((identity) => {
     const info2 = afterInfo.get(identity) ?? beforeInfo.get(identity);
@@ -20109,6 +20181,7 @@ function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__
       `<tr${rowClass(identity, compare)}>`,
       `  <td>${urlCell}</td>`,
       `  <td><code>${escapeHtml(versionCell(identity, beforeInfo, afterInfo, compare))}</code></td>`,
+      `  <td>${latestCell(identity, latest)}</td>`,
       `  <td>${typeBadge(identity, devPackages)}</td>`,
       `  <td>${changeBadge(identity, compare)}</td>`,
       `</tr>`
@@ -20141,6 +20214,7 @@ function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__
   <tr>
     <th>Package</th>
     <th>Version</th>
+    <th>Latest available</th>
     <th>Type</th>
     <th>Change</th>
   </tr>
@@ -20281,7 +20355,15 @@ async function run() {
     const beforeInfo = getPackagesWithInfo(currentPackage);
     const afterInfo = getPackagesWithInfo(packageResolved);
     if (htmlReportPath) {
-      const html = generateHtmlReport(beforeInfo, afterInfo, { removed, added, updated }, devPackages);
+      const runGit = async (command, args) => {
+        const { stdout } = await getExecOutput(command, args, {
+          silent: true,
+          ignoreReturnCode: true
+        });
+        return stdout;
+      };
+      const latest = await getLatestVersions(afterInfo, runGit);
+      const html = generateHtmlReport(beforeInfo, afterInfo, { removed, added, updated }, devPackages, latest);
       writeToPath(htmlReportPath, html);
       setOutput("html_report_path", htmlReportPath);
       info(`HTML dependency report written to ${htmlReportPath}`);
