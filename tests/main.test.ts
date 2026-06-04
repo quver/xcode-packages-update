@@ -21,6 +21,7 @@ let mockGenerateHtmlReport: ReturnType<typeof vi.fn>;
 let mockGenerateSbom: ReturnType<typeof vi.fn>;
 let mockDetectDevPackages: ReturnType<typeof vi.fn>;
 let mockGetLatestVersions: ReturnType<typeof vi.fn>;
+let mockBuildDependencyGraph: ReturnType<typeof vi.fn>;
 let mockWriteFileSync: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -44,6 +45,7 @@ beforeEach(() => {
     mockGenerateSbom = vi.fn().mockReturnValue('{}');
     mockDetectDevPackages = vi.fn().mockReturnValue(new Set());
     mockGetLatestVersions = vi.fn().mockResolvedValue(new Map());
+    mockBuildDependencyGraph = vi.fn().mockReturnValue('');
     mockWriteFileSync = vi.fn();
     vi.resetModules();
 
@@ -79,7 +81,8 @@ beforeEach(() => {
         generateHtmlReport: mockGenerateHtmlReport,
         generateSbom: mockGenerateSbom,
         detectDevPackages: mockDetectDevPackages,
-        getLatestVersions: mockGetLatestVersions
+        getLatestVersions: mockGetLatestVersions,
+        buildDependencyGraph: mockBuildDependencyGraph
     }));
 
     mockGetInput.mockImplementation((name: string) => {
@@ -436,6 +439,33 @@ describe('html report generation', () => {
         await run();
 
         expect(mockGetLatestVersions).not.toHaveBeenCalled();
+    });
+
+    test('builds the dependency graph and passes it to generateHtmlReport', async () => {
+        mockBuildDependencyGraph.mockReturnValue('flowchart TD\n  n0["firebase"]');
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'reports/deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockBuildDependencyGraph).toHaveBeenCalledWith(
+            expect.any(Map),
+            expect.any(String),
+            expect.stringContaining('checkouts')
+        );
+        expect(mockGenerateHtmlReport.mock.calls[0][5]).toBe('flowchart TD\n  n0["firebase"]');
+    });
+
+    test('does not build the dependency graph when html_report_path not set', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockBuildDependencyGraph).not.toHaveBeenCalled();
     });
 
     test('passes development packages set to generateHtmlReport', async () => {

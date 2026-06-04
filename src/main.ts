@@ -9,7 +9,8 @@ import {
     generateHtmlReport,
     generateSbom,
     detectDevPackages,
-    getLatestVersions
+    getLatestVersions,
+    buildDependencyGraph
 } from './packages.js';
 
 function findSharedScheme(workspaceFile: string, scheme: string): string | null {
@@ -146,7 +147,15 @@ export async function run(): Promise<void> {
                 return stdout;
             };
             const latest = await getLatestVersions(afterInfo, runGit);
-            const html = generateHtmlReport(beforeInfo, afterInfo, { removed, added, updated }, devPackages, latest);
+            const mermaid = buildDependencyGraph(afterInfo, projectRoot, path.join(tempDir, 'checkouts'));
+            const html = generateHtmlReport(
+                beforeInfo,
+                afterInfo,
+                { removed, added, updated },
+                devPackages,
+                latest,
+                mermaid
+            );
             writeToPath(htmlReportPath, html);
             core.setOutput('html_report_path', htmlReportPath);
             core.info(`HTML dependency report written to ${htmlReportPath}`);

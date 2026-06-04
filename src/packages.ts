@@ -332,6 +332,152 @@ export function detectDevPackages(resolvedFilePath: string, projectRoot: string)
     return result;
 }
 
+// ─── Dependency graph ────────────────────────────────────────────────────────
+
+/**
+ * Returns child package identities declared via `.package(url:)` in a manifest.
+ * Each `.package(...)` call is isolated with the bracket-counting `extractBlocks`
+ * helper, so a `url:` argument is matched within its own call rather than via a
+ * flat regex that breaks on `)` in a preceding argument. Local `.package(path:)`
+ * deps have no `url:` and are skipped.
+ */
+function manifestPackageDeps(content: string): string[] {
+    const deps: string[] = [];
+    for (const block of extractBlocks(content, 'package')) {
+        const match = /url:\s*"([^"]+)"/.exec(block);
+        if (match) deps.push(identityFromUrl(match[1]));
+    }
+    return deps;
+}
+
+/**
+ * Returns the project's direct SPM dependencies (the graph roots): every package the
+ * project itself references, gathered from project.pbxproj remote references and from
+ * Package.swift manifests located in the project root. Only identities present in
+ * Package.resolved are kept.
+ */
+export function getDirectDependencies(resolvedSet: Set<string>, projectRoot: string): Set<string> {
+    const direct = new Set<string>();
+
+    for (const filePath of findPackageSwiftFiles(projectRoot)) {
+        let content: string;
+        try {
+            content = fs.readFileSync(filePath, 'utf8');
+        } catch {
+            continue;
+        }
+        for (const ref of manifestPackageDeps(content)) {
+            if (resolvedSet.has(ref)) direct.add(ref);
+        }
+    }
+
+    for (const pbxprojPath of findPbxprojFiles(projectRoot)) {
+        const { devRefs, appRefs } = detectXcodeDevPackages(pbxprojPath);
+        for (const ref of [...devRefs, ...appRefs]) {
+            if (resolvedSet.has(ref)) direct.add(ref);
+        }
+    }
+
+    return direct;
+}
+
+/**
+ * Builds child edges for every resolved package by reading each cloned checkout's
+ * Package.swift manifest. The checkout directory name (lower-cased) is the package
+ * identity. Child identities come from `.package(url:)` declarations and are kept
+ * only when they are part of the resolved set (this drops e.g. test-only dependencies
+ * of dependencies that SPM never resolved).
+ */
+export function getDependencyEdges(checkoutsDir: string, resolvedSet: Set<string>): Map<string, string[]> {
+    const edges = new Map<string, string[]>();
+
+    let entries: fs.Dirent[];
+    try {
+        entries = fs.readdirSync(checkoutsDir, { withFileTypes: true });
+    } catch {
+        return edges;
+    }
+
+    for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+
+        const identity = entry.name.toLowerCase();
+        if (!resolvedSet.has(identity)) continue;
+
+        let content: string;
+        try {
+            content = fs.readFileSync(path.join(checkoutsDir, entry.name, 'Package.swift'), 'utf8');
+        } catch {
+            continue;
+        }
+
+        const children = [...new Set(manifestPackageDeps(content))].filter(
+            (child) => child !== identity && resolvedSet.has(child)
+        );
+        if (children.length > 0) edges.set(identity, children);
+    }
+
+    return edges;
+}
+
+function escapeMermaidLabel(label: string): string {
+    return label.replace(/"/g, "'");
+}
+
+/**
+ * Renders a Mermaid `flowchart TD` definition of the dependency graph. Direct
+ * dependencies are tagged with the `direct` class. Returns '' when there are no
+ * packages to show.
+ */
+export function generateMermaidGraph(
+    afterInfo: Map<string, PackageInfo>,
+    directDeps: Set<string>,
+    edges: Map<string, string[]>
+): string {
+    const identities = [...afterInfo.keys()].sort();
+    if (identities.length === 0) return '';
+
+    const nodeId = new Map<string, string>();
+    identities.forEach((identity, index) => nodeId.set(identity, `n${index}`));
+
+    const lines: string[] = ['flowchart TD'];
+
+    for (const identity of identities) {
+        const version = afterInfo.get(identity)?.version ?? '';
+        const label = version ? `${identity} ${version}` : identity;
+        const tag = directDeps.has(identity) ? ':::direct' : '';
+        lines.push(`  ${nodeId.get(identity)}["${escapeMermaidLabel(label)}"]${tag}`);
+    }
+
+    for (const identity of identities) {
+        for (const child of edges.get(identity) ?? []) {
+            if (nodeId.has(child)) {
+                lines.push(`  ${nodeId.get(identity)} --> ${nodeId.get(child)}`);
+            }
+        }
+    }
+
+    lines.push('  classDef direct fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;');
+
+    return lines.join('\n');
+}
+
+/**
+ * Orchestrator: reads the project sources and the cloned checkouts and returns a
+ * Mermaid graph definition for the dependency tree. `afterInfo` is the already-parsed
+ * resolved package set, so the resolved file is not read again here.
+ */
+export function buildDependencyGraph(
+    afterInfo: Map<string, PackageInfo>,
+    projectRoot: string,
+    checkoutsDir: string
+): string {
+    const resolvedSet = new Set(afterInfo.keys());
+    const directDeps = getDirectDependencies(resolvedSet, projectRoot);
+    const edges = getDependencyEdges(checkoutsDir, resolvedSet);
+    return generateMermaidGraph(afterInfo, directDeps, edges);
+}
+
 // ─── HTML report ─────────────────────────────────────────────────────────────
 
 const HTML_STYLES = `
@@ -355,6 +501,9 @@ const HTML_STYLES = `
   a { color: #0071e3; text-decoration: none; }
   a:hover { text-decoration: underline; }
   .version-arrow { color: #6e6e73; margin: 0 4px; }
+  h2 { font-size: 1.2rem; margin-top: 2.5rem; margin-bottom: 0.25rem; }
+  .graph-legend { font-size: 0.8rem; color: #6e6e73; margin-bottom: 0.75rem; }
+  pre.mermaid { background: #fff; line-height: 1.4; }
 `.trim();
 
 function typeBadge(identity: string, devPackages: Set<string>): string {
@@ -387,9 +536,9 @@ function versionCell(
     const afterVersion = afterInfo.get(identity)?.version ?? '';
 
     if (compare.updated.includes(identity) && beforeVersion && afterVersion && beforeVersion !== afterVersion) {
-        return `${beforeVersion}<span class="version-arrow">→</span>${afterVersion}`;
+        return `${escapeHtml(beforeVersion)}<span class="version-arrow">→</span>${escapeHtml(afterVersion)}`;
     }
-    return afterVersion || beforeVersion;
+    return escapeHtml(afterVersion || beforeVersion);
 }
 
 function latestCell(identity: string, latest: Map<string, string>): string {
@@ -402,7 +551,8 @@ export function generateHtmlReport(
     afterInfo: Map<string, PackageInfo>,
     compare: CompareResult,
     devPackages: Set<string> = new Set(),
-    latest: Map<string, string> = new Map()
+    latest: Map<string, string> = new Map(),
+    mermaid: string = ''
 ): string {
     const allIdentities = [...new Set([...beforeInfo.keys(), ...afterInfo.keys()])].sort();
 
@@ -416,7 +566,7 @@ export function generateHtmlReport(
             return [
                 `<tr${rowClass(identity, compare)}>`,
                 `  <td>${urlCell}</td>`,
-                `  <td><code>${escapeHtml(versionCell(identity, beforeInfo, afterInfo, compare))}</code></td>`,
+                `  <td><code>${versionCell(identity, beforeInfo, afterInfo, compare)}</code></td>`,
                 `  <td>${latestCell(identity, latest)}</td>`,
                 `  <td>${typeBadge(identity, devPackages)}</td>`,
                 `  <td>${changeBadge(identity, compare)}</td>`,
@@ -431,6 +581,21 @@ export function generateHtmlReport(
     const updated = compare.updated.length;
     const generated = new Date().toUTCString();
 
+    const mermaidScript = mermaid
+        ? `<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true });
+</script>`
+        : '';
+
+    const graphSection = mermaid
+        ? `<h2>Dependency graph</h2>
+<div class="graph-legend">Highlighted nodes are your direct dependencies; the rest are pulled in transitively.</div>
+<pre class="mermaid">
+${escapeHtml(mermaid)}
+</pre>`
+        : '';
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -438,6 +603,7 @@ export function generateHtmlReport(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Swift Package Dependencies</title>
 <style>${HTML_STYLES}</style>
+${mermaidScript}
 </head>
 <body>
 <h1>Swift Package Dependencies</h1>
@@ -462,6 +628,7 @@ export function generateHtmlReport(
 ${rows}
 </tbody>
 </table>
+${graphSection}
 </body>
 </html>`;
 }

@@ -57,6 +57,11 @@ async function loadGetLatestVersions(): Promise<typeof import('../src/packages.j
     return getLatestVersions;
 }
 
+const makeEntry = (name: string, isDir: boolean): fs.Dirent =>
+    ({ name, isFile: () => !isDir, isDirectory: () => isDir }) as unknown as fs.Dirent;
+
+const makeInfo = (version: string, url = 'https://github.com/org/repo') => ({ version, url });
+
 describe('getPackages', () => {
     test('parses version from pins', async () => {
         mockReadFileSync.mockReturnValue(
@@ -279,8 +284,6 @@ describe('comparePackages', () => {
 });
 
 describe('generateHtmlReport', () => {
-    const makeInfo = (version: string, url = 'https://github.com/org/repo') => ({ version, url });
-
     test('contains all package names', async () => {
         const generateHtmlReport = await loadGenerateHtmlReport();
         const beforeInfo = new Map([['firebase', makeInfo('11.0.0')]]);
@@ -291,6 +294,17 @@ describe('generateHtmlReport', () => {
         expect(html).toContain('firebase');
         expect(html).toContain('11.0.0');
         expect(html).toContain('12.0.0');
+    });
+
+    test('renders the version arrow as real markup, not escaped text', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+        const beforeInfo = new Map([['firebase', makeInfo('10.29.0')]]);
+        const afterInfo = new Map([['firebase', makeInfo('11.0.0')]]);
+
+        const html = generateHtmlReport(beforeInfo, afterInfo, { removed: [], added: [], updated: ['firebase'] });
+
+        expect(html).toContain('10.29.0<span class="version-arrow">→</span>11.0.0');
+        expect(html).not.toContain('&lt;span');
     });
 
     test('marks updated packages with updated row class', async () => {
@@ -411,6 +425,53 @@ describe('generateHtmlReport', () => {
 
         expect(html).toContain('—');
     });
+
+    test('includes the dependency graph section when a mermaid graph is provided', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+        const info = new Map([['firebase', makeInfo('11.0.0')]]);
+
+        const html = generateHtmlReport(
+            info,
+            info,
+            { removed: [], added: [], updated: [] },
+            new Set(),
+            new Map(),
+            'flowchart TD\n  n0["firebase 11.0.0"]'
+        );
+
+        expect(html).toContain('Dependency graph');
+        expect(html).toContain('<pre class="mermaid">');
+        expect(html).toContain('mermaid.esm.min.mjs');
+        expect(html).toContain('flowchart TD');
+    });
+
+    test('omits the dependency graph section when no mermaid graph is provided', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+        const info = new Map([['firebase', makeInfo('11.0.0')]]);
+
+        const html = generateHtmlReport(info, info, { removed: [], added: [], updated: [] });
+
+        expect(html).not.toContain('Dependency graph');
+        expect(html).not.toContain('<pre class="mermaid">');
+        expect(html).not.toContain('mermaid.esm.min.mjs');
+    });
+
+    test('html-escapes the embedded mermaid block so labels cannot break the page', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+        const info = new Map([['firebase', makeInfo('11.0.0')]]);
+
+        const html = generateHtmlReport(
+            info,
+            info,
+            { removed: [], added: [], updated: [] },
+            new Set(),
+            new Map(),
+            'flowchart TD\n  n0["a<b & c"]'
+        );
+
+        expect(html).toContain('a&lt;b &amp; c');
+        expect(html).not.toContain('n0["a<b & c"]');
+    });
 });
 
 describe('selectLatestStableVersion', () => {
@@ -446,8 +507,6 @@ describe('selectLatestStableVersion', () => {
 });
 
 describe('getLatestVersions', () => {
-    const makeInfo = (version: string, url = 'https://github.com/org/repo') => ({ version, url });
-
     test('returns the highest tag for each package from git ls-remote', async () => {
         const getLatestVersions = await loadGetLatestVersions();
         const afterInfo = new Map([['firebase', makeInfo('11.0.0', 'https://github.com/firebase/firebase-ios-sdk')]]);
@@ -495,6 +554,174 @@ describe('getLatestVersions', () => {
         const result = await getLatestVersions(afterInfo, runGit);
 
         expect(result.has('firebase')).toBe(false);
+    });
+});
+
+describe('generateMermaidGraph', () => {
+    test('renders nodes, edges and tags direct dependencies', async () => {
+        const { generateMermaidGraph } = await import('../src/packages.js');
+        const afterInfo = new Map([
+            ['firebase', makeInfo('11.0.0')],
+            ['swift-protobuf', makeInfo('1.28.0')]
+        ]);
+        const edges = new Map([['firebase', ['swift-protobuf']]]);
+
+        const graph = generateMermaidGraph(afterInfo, new Set(['firebase']), edges);
+
+        expect(graph).toContain('flowchart TD');
+        expect(graph).toContain('firebase 11.0.0');
+        expect(graph).toContain('swift-protobuf 1.28.0');
+        expect(graph).toContain(':::direct');
+        expect(graph).toMatch(/n\d+ --> n\d+/);
+        expect(graph).toContain('classDef direct');
+    });
+
+    test('does not tag transitive dependencies as direct', async () => {
+        const { generateMermaidGraph } = await import('../src/packages.js');
+        const afterInfo = new Map([['swift-protobuf', makeInfo('1.28.0')]]);
+
+        const graph = generateMermaidGraph(afterInfo, new Set(), new Map());
+
+        expect(graph).not.toContain(':::direct');
+    });
+
+    test('returns empty string when there are no packages', async () => {
+        const { generateMermaidGraph } = await import('../src/packages.js');
+
+        expect(generateMermaidGraph(new Map(), new Set(), new Map())).toBe('');
+    });
+
+    test('renders a shared transitive dependency once with multiple incoming edges', async () => {
+        const { generateMermaidGraph } = await import('../src/packages.js');
+        const afterInfo = new Map([
+            ['firebase', makeInfo('1.0.0')],
+            ['grpc', makeInfo('1.0.0')],
+            ['swift-protobuf', makeInfo('1.0.0')]
+        ]);
+        const edges = new Map([
+            ['firebase', ['swift-protobuf']],
+            ['grpc', ['swift-protobuf']]
+        ]);
+
+        const graph = generateMermaidGraph(afterInfo, new Set(['firebase', 'grpc']), edges);
+
+        const declarations = graph.split('\n').filter((line) => line.includes('["swift-protobuf'));
+        expect(declarations).toHaveLength(1);
+
+        const protobufId = /(\w+)\["swift-protobuf/.exec(graph)![1];
+        const incoming = graph.split('\n').filter((line) => line.trim().endsWith(`--> ${protobufId}`));
+        expect(incoming).toHaveLength(2);
+    });
+});
+
+describe('getDependencyEdges', () => {
+    test('builds edges from checkout manifests filtered to the resolved set', async () => {
+        const { getDependencyEdges } = await import('../src/packages.js');
+        mockReaddirSync.mockReturnValue([makeEntry('firebase-ios-sdk', true), makeEntry('swift-protobuf', true)]);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).includes('firebase-ios-sdk'))
+                return `.package(url: "https://github.com/apple/swift-protobuf", from: "1.0.0")
+                        .package(url: "https://github.com/x/ghost", from: "1.0.0")`;
+            return '';
+        });
+
+        const result = getDependencyEdges('/tmp/checkouts', new Set(['firebase-ios-sdk', 'swift-protobuf']));
+
+        expect(result.get('firebase-ios-sdk')).toEqual(['swift-protobuf']);
+        expect(result.has('swift-protobuf')).toBe(false);
+    });
+
+    test('extracts the url even when it is not the first .package argument and skips local path deps', async () => {
+        const { getDependencyEdges } = await import('../src/packages.js');
+        mockReaddirSync.mockReturnValue([makeEntry('firebase-ios-sdk', true)]);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).includes('firebase-ios-sdk'))
+                return `.package(path: "../LocalOnly")
+                        .package(name: "SwiftProtobuf", url: "https://github.com/apple/swift-protobuf", from: "1.0.0")`;
+            return '';
+        });
+
+        const result = getDependencyEdges('/tmp/checkouts', new Set(['firebase-ios-sdk', 'swift-protobuf']));
+
+        expect(result.get('firebase-ios-sdk')).toEqual(['swift-protobuf']);
+    });
+
+    test('skips checkout directories not present in the resolved set', async () => {
+        const { getDependencyEdges } = await import('../src/packages.js');
+        mockReaddirSync.mockReturnValue([makeEntry('unrelated', true)]);
+
+        const result = getDependencyEdges('/tmp/checkouts', new Set(['firebase-ios-sdk']));
+
+        expect(result.size).toBe(0);
+        expect(mockReadFileSync).not.toHaveBeenCalled();
+    });
+
+    test('returns an empty map when the checkouts directory cannot be read', async () => {
+        const { getDependencyEdges } = await import('../src/packages.js');
+        mockReaddirSync.mockImplementation(() => {
+            throw new Error('ENOENT');
+        });
+
+        const result = getDependencyEdges('/tmp/checkouts', new Set(['firebase-ios-sdk']));
+
+        expect(result.size).toBe(0);
+    });
+});
+
+describe('getDirectDependencies', () => {
+    test('collects direct deps declared in the project Package.swift', async () => {
+        const { getDirectDependencies } = await import('../src/packages.js');
+        mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
+        mockReadFileSync.mockReturnValue(
+            '.package(url: "https://github.com/firebase/firebase-ios-sdk", from: "11.0.0")'
+        );
+
+        const result = getDirectDependencies(new Set(['firebase-ios-sdk', 'swift-protobuf']), '.');
+
+        expect(result.has('firebase-ios-sdk')).toBe(true);
+        expect(result.has('swift-protobuf')).toBe(false);
+    });
+
+    test('collects direct deps from project.pbxproj remote references', async () => {
+        const { getDirectDependencies } = await import('../src/packages.js');
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir) === '.') return [makeEntry('MyApp.xcodeproj', true)];
+            return [];
+        });
+        mockExistsSync.mockReturnValue(true);
+        mockReadFileSync.mockReturnValue(
+            'AAAAAAAAAAAAAAAAAAAAAAAA /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = { repositoryURL = "https://github.com/firebase/firebase-ios-sdk" }'
+        );
+
+        const result = getDirectDependencies(new Set(['firebase-ios-sdk']), '.');
+
+        expect(result.has('firebase-ios-sdk')).toBe(true);
+    });
+});
+
+describe('buildDependencyGraph', () => {
+    test('produces a mermaid graph from the resolved set, project sources and checkouts', async () => {
+        const { buildDependencyGraph } = await import('../src/packages.js');
+        const afterInfo = new Map([
+            ['firebase-ios-sdk', { version: '1.0.0', url: 'https://github.com/firebase/firebase-ios-sdk' }],
+            ['swift-protobuf', { version: '1.0.0', url: 'https://github.com/apple/swift-protobuf' }]
+        ]);
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir).includes('checkouts')) return [makeEntry('firebase-ios-sdk', true)];
+            return [makeEntry('Package.swift', false)];
+        });
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).includes('checkouts'))
+                return '.package(url: "https://github.com/apple/swift-protobuf", from: "1.0.0")';
+            return '.package(url: "https://github.com/firebase/firebase-ios-sdk", from: "11.0.0")';
+        });
+
+        const graph = buildDependencyGraph(afterInfo, '.', '/tmp/checkouts');
+
+        expect(graph).toContain('flowchart TD');
+        expect(graph).toContain('firebase-ios-sdk');
+        expect(graph).toContain('swift-protobuf');
+        expect(graph).toMatch(/n\d+ --> n\d+/);
     });
 });
 
@@ -613,9 +840,6 @@ describe('detectDevPackages', () => {
                 state: { version: '1.0.0' }
             }))
         });
-
-    const makeEntry = (name: string, isDir: boolean): fs.Dirent =>
-        ({ name, isFile: () => !isDir, isDirectory: () => isDir }) as unknown as fs.Dirent;
 
     test('classifies test-only package as development', async () => {
         const packageSwift = `
@@ -982,9 +1206,6 @@ describe('detectXcodeDevPackages', () => {
 });
 
 describe('findPbxprojFiles existsSync true path', () => {
-    const makeEntry = (name: string, isDir: boolean): fs.Dirent =>
-        ({ name, isFile: () => !isDir, isDirectory: () => isDir }) as unknown as fs.Dirent;
-
     test('includes pbxproj path in detectDevPackages when existsSync returns true', async () => {
         const pbxproj = [
             `AAAAAAAAAAAAAAAAAAAAAAAA /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */ = { repositoryURL = "https://github.com/pointfreeco/swift-snapshot-testing" }`,
