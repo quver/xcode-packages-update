@@ -19965,7 +19965,7 @@ async function getLatestVersions(afterInfo, runGit) {
     entries.map(async ([identity, info2]) => {
       try {
         const stdout = await runGit("git", ["ls-remote", "--tags", "--refs", info2.url]);
-        const tags = stdout.split("\n").map((line) => line.split("/").pop()?.trim() ?? "").filter(Boolean);
+        const tags = stdout.split("\n").map((line) => line.slice(line.lastIndexOf("/") + 1).trim()).filter(Boolean);
         return [identity, selectLatestStableVersion(tags)];
       } catch {
         return [identity, ""];
@@ -20187,7 +20187,7 @@ function generateMermaidGraph(afterInfo, directDeps, edges) {
   identities.forEach((identity, index) => nodeId.set(identity, `n${index}`));
   const lines = ["flowchart TD"];
   for (const identity of identities) {
-    const version = afterInfo.get(identity)?.version ?? "";
+    const version = afterInfo.get(identity).version;
     const label = version ? `${identity} ${version}` : identity;
     const tag = directDeps.has(identity) ? ":::direct" : "";
     lines.push(`  ${nodeId.get(identity)}["${escapeMermaidLabel(label)}"]${tag}`);

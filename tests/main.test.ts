@@ -468,6 +468,28 @@ describe('html report generation', () => {
         expect(mockBuildDependencyGraph).not.toHaveBeenCalled();
     });
 
+    test('runGit closure fetches tags through exec.getExecOutput', async () => {
+        mockGetLatestVersions.mockImplementation(async (_afterInfo, runGit) => {
+            await runGit('git', ['ls-remote', '--tags', '--refs', 'https://example.com/repo']);
+            return new Map();
+        });
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'reports/deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockGetExecOutput).toHaveBeenCalledWith(
+            'git',
+            ['ls-remote', '--tags', '--refs', 'https://example.com/repo'],
+            { silent: true, ignoreReturnCode: true }
+        );
+    });
+
     test('passes development packages set to generateHtmlReport', async () => {
         mockGetInput.mockImplementation((name: string) => {
             if (name === 'project_file') return 'MyApp.xcodeproj';

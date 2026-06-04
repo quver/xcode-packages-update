@@ -104,7 +104,7 @@ export async function getLatestVersions(
                 const stdout = await runGit('git', ['ls-remote', '--tags', '--refs', info.url]);
                 const tags = stdout
                     .split('\n')
-                    .map((line) => line.split('/').pop()?.trim() ?? '')
+                    .map((line) => line.slice(line.lastIndexOf('/') + 1).trim())
                     .filter(Boolean);
                 return [identity, selectLatestStableVersion(tags)] as const;
             } catch {
@@ -443,7 +443,7 @@ export function generateMermaidGraph(
     const lines: string[] = ['flowchart TD'];
 
     for (const identity of identities) {
-        const version = afterInfo.get(identity)?.version ?? '';
+        const version = afterInfo.get(identity)!.version;
         const label = version ? `${identity} ${version}` : identity;
         const tag = directDeps.has(identity) ? ':::direct' : '';
         lines.push(`  ${nodeId.get(identity)}["${escapeMermaidLabel(label)}"]${tag}`);
