@@ -1,6 +1,6 @@
 {
   "name": "xcode-packages-update",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "description": "Resolves Xcode SPM dependencies and reports what changed",
   "type": "module",
   "engines": {
