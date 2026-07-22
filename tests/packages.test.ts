@@ -125,6 +125,61 @@ describe('getPackages', () => {
 
         expect(result.size).toBe(0);
     });
+
+    test('detects a revision change on an unchanged branch pin', async () => {
+        const versionFor = (revision: string) =>
+            JSON.stringify({
+                pins: [
+                    {
+                        identity: 'some-package',
+                        location: 'https://github.com/org/repo',
+                        state: { branch: 'main', revision }
+                    }
+                ]
+            });
+
+        const getPackages = await loadGetPackages();
+
+        mockReadFileSync.mockReturnValue(versionFor('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'));
+        const before = getPackages('Package.resolved');
+
+        mockReadFileSync.mockReturnValue(versionFor('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'));
+        const after = getPackages('Package.resolved');
+
+        expect(before.get('some-package')).not.toBe(after.get('some-package'));
+        expect(comparePackages(before, after).updated).toEqual(['some-package']);
+    });
+
+    test('parses the legacy v1 Package.resolved format ({ object: { pins } })', async () => {
+        mockReadFileSync.mockReturnValue(
+            JSON.stringify({
+                object: {
+                    pins: [
+                        {
+                            package: 'Alamofire',
+                            repositoryURL: 'https://github.com/Alamofire/Alamofire.git',
+                            state: { version: '5.6.4', revision: 'abc123' }
+                        }
+                    ]
+                },
+                version: 1
+            })
+        );
+
+        const getPackages = await loadGetPackages();
+        const result = getPackages('Package.resolved');
+
+        expect(result.get('alamofire')).toBe('5.6.4');
+    });
+
+    test('treats a non-array pins field as no packages instead of throwing', async () => {
+        mockReadFileSync.mockReturnValue(JSON.stringify({ pins: { not: 'an array' } }));
+
+        const getPackages = await loadGetPackages();
+
+        expect(() => getPackages('Package.resolved')).not.toThrow();
+        expect(getPackages('Package.resolved').size).toBe(0);
+    });
 });
 
 describe('getPackagesWithInfo', () => {
@@ -370,6 +425,25 @@ describe('generateHtmlReport', () => {
         expect(html).toContain('href="https://github.com/firebase/firebase-ios-sdk"');
     });
 
+    test('adds rel=noopener noreferrer to repository links', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+        const info = new Map([['firebase', makeInfo('12.0.0', 'https://github.com/firebase/firebase-ios-sdk')]]);
+
+        const html = generateHtmlReport(info, info, { removed: [], added: [], updated: [] });
+
+        expect(html).toContain('rel="noopener noreferrer"');
+    });
+
+    test('does not render a javascript: URL as a clickable link', async () => {
+        const generateHtmlReport = await loadGenerateHtmlReport();
+        const info = new Map([['evil-pkg', makeInfo('1.0.0', 'javascript:alert(document.cookie)')]]);
+
+        const html = generateHtmlReport(info, info, { removed: [], added: [], updated: [] });
+
+        expect(html).not.toContain('href="javascript:');
+        expect(html).toContain('evil-pkg');
+    });
+
     test('renders package name as plain text when url is empty', async () => {
         const generateHtmlReport = await loadGenerateHtmlReport();
         const info = new Map([['no-url-pkg', makeInfo('1.0.0', '')]]);
@@ -526,6 +600,7 @@ describe('getLatestVersions', () => {
             'ls-remote',
             '--tags',
             '--refs',
+            '--',
             'https://github.com/firebase/firebase-ios-sdk'
         ]);
         expect(result.get('firebase')).toBe('12.5.0');
@@ -793,6 +868,35 @@ describe('getDirectDependencies', () => {
 
         expect(result.size).toBe(0);
     });
+
+    test('finds a project.pbxproj referenced one directory level below the workspace (e.g. container:SubDir/App.xcodeproj)', async () => {
+        const { getDirectDependencies } = await import('../src/packages.js');
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir) === '.') return [makeEntry('SubDir', true)];
+            if (String(dir) === 'SubDir') return [makeEntry('MyApp.xcodeproj', true)];
+            return [];
+        });
+        mockExistsSync.mockReturnValue(true);
+        mockReadFileSync.mockReturnValue(
+            'AAAAAAAAAAAAAAAAAAAAAAAA /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = { repositoryURL = "https://github.com/firebase/firebase-ios-sdk" }'
+        );
+
+        const result = getDirectDependencies(new Set(['firebase-ios-sdk']), '.');
+
+        expect(result.has('firebase-ios-sdk')).toBe(true);
+    });
+
+    test('excludes the given excludeDir from both the Package.swift and pbxproj scan', async () => {
+        const { getDirectDependencies } = await import('../src/packages.js');
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir) === '.') return [makeEntry('.spm-tmp', true)];
+            throw new Error(`should not scan excluded dir: ${dir}`);
+        });
+
+        const result = getDirectDependencies(new Set(['firebase-ios-sdk']), '.', '.spm-tmp');
+
+        expect(result.size).toBe(0);
+    });
 });
 
 describe('buildDependencyGraph', () => {
@@ -915,6 +1019,24 @@ describe('generateSbom', () => {
 
         expect(sbom.components[0].purl).toBe('pkg:swift/mypkg@2.0.0');
     });
+
+    test('builds a namespaced purl from an scp-style git URL', async () => {
+        const generateSbom = await loadGenerateSbom();
+        const info = new Map([['mypkg', { version: '1.0.0', url: 'git@github.com:org/mypkg.git' }]]);
+
+        const sbom = JSON.parse(generateSbom(info));
+
+        expect(sbom.components[0].purl).toBe('pkg:swift/github.com/org/mypkg@1.0.0');
+    });
+
+    test('omits the trailing @ when the version is empty', async () => {
+        const generateSbom = await loadGenerateSbom();
+        const info = new Map([['mypkg', { version: '', url: 'https://github.com/org/mypkg' }]]);
+
+        const sbom = JSON.parse(generateSbom(info));
+
+        expect(sbom.components[0].purl).toBe('pkg:swift/github.com/org/mypkg');
+    });
 });
 
 describe('detectDevPackages', () => {
@@ -999,6 +1121,61 @@ describe('detectDevPackages', () => {
         const result = detectDevPackages('Package.resolved', '.');
 
         expect(result.has('shared-lib')).toBe(false);
+    });
+
+    test('classifies a package used only in an executableTarget as app, not dev', async () => {
+        const packageSwift = `
+            .executableTarget(name: "MyTool", dependencies: [
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ])
+            .testTarget(name: "MyToolTests", dependencies: [
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ])
+        `;
+
+        mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved')) return makeResolved('swift-argument-parser');
+            return packageSwift;
+        });
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.has('swift-argument-parser')).toBe(false);
+    });
+
+    test('a parenthesis inside a string literal does not swallow the following target block', async () => {
+        const packageSwift = `
+            .testTarget(name: "MyTests", dependencies: [], cSettings: [.define("USE_FOO(")])
+            .target(name: "MyApp", dependencies: [
+                .product(name: "Firebase", package: "firebase-ios-sdk")
+            ])
+        `;
+
+        mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved')) return makeResolved('firebase-ios-sdk');
+            return packageSwift;
+        });
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.has('firebase-ios-sdk')).toBe(false);
+    });
+
+    test('excludes the given excludeDir from the Package.swift scan', async () => {
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (dir === '.') return [makeEntry('.spm-tmp', true)];
+            throw new Error(`should not scan excluded dir: ${dir}`);
+        });
+        mockReadFileSync.mockReturnValue(makeResolved());
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.', '.spm-tmp');
+
+        expect(result.size).toBe(0);
     });
 
     test('returns empty set when no Package.swift files found', async () => {
@@ -1141,10 +1318,16 @@ describe('detectXcodeDevPackages', () => {
             .join('\n');
 
         const targetSection = targets
-            .map(
-                ({ name, depIds }) =>
-                    `isa = PBXNativeTarget;\nname = ${name};\npackageProductDependencies = (\n${depIds.map((id) => `  ${id} /* dep */,`).join('\n')}\n);`
-            )
+            .map(({ name, depIds }, index) => {
+                const targetId = `TARGETID${String(index).padStart(16, '0')}`;
+                return (
+                    `${targetId} /* ${name} */ = {\n` +
+                    `  isa = PBXNativeTarget;\n` +
+                    `  name = ${name};\n` +
+                    `  packageProductDependencies = (\n${depIds.map((id) => `    ${id} /* dep */,`).join('\n')}\n  );\n` +
+                    `};`
+                );
+            })
             .join('\n');
 
         return [refSection, depSection, targetSection].join('\n\n');
@@ -1266,6 +1449,44 @@ describe('detectXcodeDevPackages', () => {
         const { devRefs } = detectXcodeDevPackages('project.pbxproj');
 
         expect(devRefs.has('swiftlintplugins')).toBe(true);
+    });
+
+    test('derives identity correctly from a URL with a trailing slash after .git', async () => {
+        const pbxproj = makePbxproj({
+            remoteRefs: [
+                {
+                    id: SWIFTLINT_REF_ID,
+                    name: 'SwiftLintPlugins',
+                    url: 'https://github.com/SimplyDanny/SwiftLintPlugins.git/'
+                }
+            ],
+            productDeps: [],
+            targets: []
+        });
+        mockReadFileSync.mockReturnValue(pbxproj);
+
+        const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
+        const { devRefs } = detectXcodeDevPackages('project.pbxproj');
+
+        expect(devRefs.has('swiftlintplugins')).toBe(true);
+    });
+
+    test('does not leak a dependency into the next target when a target has no packageProductDependencies', async () => {
+        // A target with no SPM deps at all has no `packageProductDependencies` key/block —
+        // the previous flat regex would bleed forward into the *next* target's dependency list.
+        const pbxproj = [
+            `${SNAPSHOT_REF_ID} /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */ = { repositoryURL = "https://github.com/pointfreeco/swift-snapshot-testing"; };`,
+            `${SNAPSHOT_DEP_ID} /* SnapshotTesting */ = {\n  isa = XCSwiftPackageProductDependency;\n  package = ${SNAPSHOT_REF_ID} /* ref */;\n  productName = SnapshotTesting;\n};`,
+            `TARGETID0000000000000000 /* Futurum */ = {\n  isa = PBXNativeTarget;\n  name = Futurum;\n  buildPhases = (\n  );\n};`,
+            `TARGETID0000000000000001 /* FuturumTests */ = {\n  isa = PBXNativeTarget;\n  name = FuturumTests;\n  packageProductDependencies = (\n    ${SNAPSHOT_DEP_ID} /* dep */,\n  );\n};`
+        ].join('\n\n');
+        mockReadFileSync.mockReturnValue(pbxproj);
+
+        const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
+        const { devRefs, appRefs } = detectXcodeDevPackages('project.pbxproj');
+
+        expect(devRefs.has('swift-snapshot-testing')).toBe(true);
+        expect(appRefs.has('swift-snapshot-testing')).toBe(false);
     });
 
     test('ignores product dep without a remote package reference (local dep)', async () => {

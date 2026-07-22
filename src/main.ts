@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import {
     getPackages,
@@ -10,7 +11,8 @@ import {
     generateSbom,
     detectDevPackages,
     getLatestVersions,
-    buildDependencyGraph
+    buildDependencyGraph,
+    type PackageInfo
 } from './packages.js';
 
 function findSharedScheme(workspaceFile: string, scheme: string): string | null {
@@ -27,7 +29,7 @@ function findSharedScheme(workspaceFile: string, scheme: string): string | null 
     const contents = fs.readFileSync(contentsPath, 'utf8');
     const workspaceDir = path.dirname(workspaceFile);
 
-    for (const [, ref] of contents.matchAll(/location\s*=\s*"container:([^"]+)"/g)) {
+    for (const [, ref] of contents.matchAll(/location\s*=\s*"(?:container|group):([^"]+)"/g)) {
         const projectSchemePath = path.join(workspaceDir, ref, 'xcshareddata', 'xcschemes', schemeFilename);
         if (fs.existsSync(projectSchemePath)) return projectSchemePath;
     }
@@ -35,11 +37,12 @@ function findSharedScheme(workspaceFile: string, scheme: string): string | null 
     return null;
 }
 
+/** Matches case-insensitively against Package.resolved identities, which are always lowercase. */
 function parseDevPackages(input: string): Set<string> {
     return new Set(
         input
             .split(/[\n,]/)
-            .map((s) => s.trim())
+            .map((s) => s.trim().toLowerCase())
             .filter(Boolean)
     );
 }
@@ -48,6 +51,21 @@ function writeToPath(filePath: string, content: string): void {
     const dir = path.dirname(path.resolve(filePath));
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(filePath, content, 'utf8');
+}
+
+/** Guards against temporary_packages_dir_path pointing outside the workspace before it is recursively deleted. */
+function assertSafeTempDir(tempDir: string): void {
+    const resolved = path.resolve(tempDir);
+    const cwd = process.cwd();
+    const relative = path.relative(cwd, resolved);
+    const escapesWorkspace = relative === '' || relative.startsWith('..') || path.isAbsolute(relative);
+
+    if (escapesWorkspace) {
+        throw new Error(
+            `temporary_packages_dir_path ("${tempDir}") must resolve to a subdirectory inside the workspace, ` +
+                `not "${resolved}".`
+        );
+    }
 }
 
 export async function run(): Promise<void> {
@@ -92,40 +110,37 @@ export async function run(): Promise<void> {
         ? `${workspaceFile}/xcshareddata/swiftpm/Package.resolved`
         : `${projectFile}/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`;
 
-    const currentPackage = path.join(__dirname, 'CurrentPackage.resolved');
+    // RUNNER_TEMP is a per-job directory managed by the runner, unlike the action's own
+    // (shared, cached) install directory under __dirname.
+    const snapshotDir = process.env.RUNNER_TEMP || os.tmpdir();
+    const currentPackage = path.join(snapshotDir, 'CurrentPackage.resolved');
 
+    assertSafeTempDir(tempDir);
     fs.rmSync(tempDir, { recursive: true, force: true });
 
     core.saveState('temp_dir', tempDir);
     core.saveState('current_package', currentPackage);
 
-    fs.renameSync(packageResolved, currentPackage);
+    // Copy (not move) so the workspace's Package.resolved is never left missing
+    // if xcodebuild or report generation fails before it gets rewritten.
+    const hadExistingResolved = fs.existsSync(packageResolved);
+    if (hadExistingResolved) {
+        fs.copyFileSync(packageResolved, currentPackage);
+    }
 
     fs.mkdirSync(tempDir, { recursive: true });
 
-    const xcodebuildArgs = workspaceFile
-        ? [
-              '-workspace',
-              workspaceFile,
-              '-scheme',
-              scheme,
-              '-resolvePackageDependencies',
-              '-disablePackageRepositoryCache',
-              '-clonedSourcePackagesDirPath',
-              tempDir
-          ]
-        : [
-              '-project',
-              projectFile,
-              '-resolvePackageDependencies',
-              '-disablePackageRepositoryCache',
-              '-clonedSourcePackagesDirPath',
-              tempDir
-          ];
+    const xcodebuildArgs = [
+        ...(workspaceFile ? ['-workspace', workspaceFile, '-scheme', scheme] : ['-project', projectFile]),
+        '-resolvePackageDependencies',
+        '-disablePackageRepositoryCache',
+        '-clonedSourcePackagesDirPath',
+        tempDir
+    ];
 
     await exec.exec('xcodebuild', xcodebuildArgs);
 
-    const before = getPackages(currentPackage);
+    const before = hadExistingResolved ? getPackages(currentPackage) : new Map<string, string>();
     const after = getPackages(packageResolved);
     const { removed, added, updated } = comparePackages(before, after);
 
@@ -133,21 +148,22 @@ export async function run(): Promise<void> {
         const projectRoot = path.resolve(projectFile ? path.dirname(projectFile) : path.dirname(workspaceFile));
         const devPackages = devPackagesInput
             ? parseDevPackages(devPackagesInput)
-            : detectDevPackages(packageResolved, projectRoot);
+            : detectDevPackages(packageResolved, projectRoot, tempDir);
 
-        const beforeInfo = getPackagesWithInfo(currentPackage);
+        const beforeInfo = hadExistingResolved ? getPackagesWithInfo(currentPackage) : new Map<string, PackageInfo>();
         const afterInfo = getPackagesWithInfo(packageResolved);
 
         if (htmlReportPath) {
             const runGit = async (command: string, args: string[]): Promise<string> => {
                 const { stdout } = await exec.getExecOutput(command, args, {
                     silent: true,
-                    ignoreReturnCode: true
+                    // Fail fast instead of hanging on a credential prompt for a private/moved repo.
+                    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
                 });
                 return stdout;
             };
             const latest = await getLatestVersions(afterInfo, runGit);
-            const mermaid = buildDependencyGraph(afterInfo, projectRoot, path.join(tempDir, 'checkouts'));
+            const mermaid = buildDependencyGraph(afterInfo, projectRoot, path.join(tempDir, 'checkouts'), tempDir);
             const html = generateHtmlReport(
                 beforeInfo,
                 afterInfo,

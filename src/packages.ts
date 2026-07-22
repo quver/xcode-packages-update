@@ -7,28 +7,57 @@ export interface PackageInfo {
     url: string;
 }
 
+interface ResolvedState {
+    version?: string | null;
+    branch?: string | null;
+    revision?: string | null;
+}
+
 interface ResolvedPin {
     identity: string;
     location?: string;
-    state?: {
-        version?: string;
-        branch?: string;
-        revision?: string;
-    };
+    state?: ResolvedState;
 }
 
-interface ResolvedFile {
+interface ResolvedFileV2 {
     pins: ResolvedPin[];
+}
+
+/** Legacy Package.resolved format written by Xcode <= 13.2. */
+interface ResolvedFileV1 {
+    object: {
+        pins: { package: string; repositoryURL: string; state?: ResolvedState }[];
+    };
 }
 
 function parseResolved(filePath: string): ResolvedPin[] {
     const content = fs.readFileSync(filePath, 'utf8');
-    const parsed = JSON.parse(content) as ResolvedFile;
-    return parsed.pins ?? [];
+    const parsed = JSON.parse(content) as ResolvedFileV2 | ResolvedFileV1;
+
+    if ('object' in parsed) {
+        const pins = parsed.object?.pins;
+        if (!Array.isArray(pins)) return [];
+        return pins.map((pin) => ({
+            identity: identityFromUrl(pin.repositoryURL),
+            location: pin.repositoryURL,
+            state: pin.state ?? undefined
+        }));
+    }
+
+    return Array.isArray(parsed.pins) ? parsed.pins : [];
 }
 
+/**
+ * Resolves a display/compare string for a pin. Branch pins include the short
+ * revision (e.g. `main+abc1234`) so that a new commit on an unchanged branch
+ * name is still detected as an update by comparePackages.
+ */
 function resolveVersion(state: ResolvedPin['state']): string {
-    return state?.version ?? state?.branch ?? state?.revision ?? '';
+    if (state?.version) return state.version;
+    if (state?.branch) {
+        return state.revision ? `${state.branch}+${state.revision.slice(0, 7)}` : state.branch;
+    }
+    return state?.revision ?? '';
 }
 
 export function getPackages(filePath: string): Map<string, string> {
@@ -88,9 +117,49 @@ export function selectLatestStableVersion(tags: string[]): string {
     return best ? best.join('.') : '';
 }
 
+const GIT_LS_REMOTE_CONCURRENCY = 8;
+const GIT_LS_REMOTE_TIMEOUT_MS = 15_000;
+const REFS_TAGS_PREFIX = 'refs/tags/';
+
+/** Runs `fn` over `items` with at most `limit` calls in flight at once. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+    const results: R[] = new Array(items.length);
+    let next = 0;
+
+    async function worker(): Promise<void> {
+        while (next < items.length) {
+            const index = next++;
+            results[index] = await fn(items[index]);
+        }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+}
+
+/** Races `promise` against a timeout, resolving to `fallback` if `ms` elapses first. */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+    promise.catch(() => {}); // avoid an unhandled rejection if it settles after the timeout
+    return new Promise<T>((resolve) => {
+        const timer = setTimeout(() => resolve(fallback), ms);
+        promise.then(
+            (value) => {
+                clearTimeout(timer);
+                resolve(value);
+            },
+            () => {
+                clearTimeout(timer);
+                resolve(fallback);
+            }
+        );
+    });
+}
+
 /**
  * Resolves the highest available version for each package by reading its git tags
  * via `git ls-remote`. Packages without a URL or without reachable tags are skipped.
+ * Lookups run with bounded concurrency and a per-package timeout so one slow or
+ * unresponsive remote cannot stall the whole run.
  */
 export async function getLatestVersions(
     afterInfo: Map<string, PackageInfo>,
@@ -98,20 +167,24 @@ export async function getLatestVersions(
 ): Promise<Map<string, string>> {
     const entries = [...afterInfo.entries()].filter(([, info]) => info.url);
 
-    const results = await Promise.all(
-        entries.map(async ([identity, info]) => {
-            try {
-                const stdout = await runGit('git', ['ls-remote', '--tags', '--refs', info.url]);
-                const tags = stdout
-                    .split('\n')
-                    .map((line) => line.slice(line.lastIndexOf('/') + 1).trim())
-                    .filter(Boolean);
-                return [identity, selectLatestStableVersion(tags)] as const;
-            } catch {
-                return [identity, ''] as const;
-            }
-        })
-    );
+    const results = await mapWithConcurrency(entries, GIT_LS_REMOTE_CONCURRENCY, async ([identity, info]) => {
+        try {
+            // `--` marks the end of options so a location value can never be parsed as a git flag.
+            const stdout = await withTimeout(
+                runGit('git', ['ls-remote', '--tags', '--refs', '--', info.url]),
+                GIT_LS_REMOTE_TIMEOUT_MS,
+                ''
+            );
+            const tags = stdout
+                .split('\n')
+                .map((line) => line.slice(line.indexOf('\t') + 1).trim())
+                .filter((ref) => ref.startsWith(REFS_TAGS_PREFIX))
+                .map((ref) => ref.slice(REFS_TAGS_PREFIX.length));
+            return [identity, selectLatestStableVersion(tags)] as const;
+        } catch {
+            return [identity, ''] as const;
+        }
+    });
 
     return new Map(results.filter(([, version]) => version));
 }
@@ -127,33 +200,55 @@ export function comparePackages(before: Map<string, string>, after: Map<string, 
 
 const EXCLUDE_DIRS = new Set(['.build', 'node_modules', '.git', 'DerivedData', '.spm-tmp', '.swiftpm']);
 
-function findPackageSwiftFiles(rootDir: string): string[] {
-    const results: string[] = [];
+/** Directory tree walk shared by findPackageSwiftFiles/findPbxprojFiles, skipping EXCLUDE_DIRS and `excludeDir`. */
+function walkDirs(
+    rootDir: string,
+    excludeDir: string | undefined,
+    visit: (dir: string, entries: fs.Dirent[]) => void
+): void {
+    const resolvedExclude = excludeDir ? path.resolve(excludeDir) : undefined;
 
     function scan(dir: string): void {
+        if (resolvedExclude && path.resolve(dir) === resolvedExclude) return;
         let entries: fs.Dirent[];
         try {
             entries = fs.readdirSync(dir, { withFileTypes: true });
         } catch {
             return;
         }
+        visit(dir, entries);
         for (const entry of entries) {
             if (entry.isDirectory() && !EXCLUDE_DIRS.has(entry.name)) {
                 scan(path.join(dir, entry.name));
-            } else if (entry.isFile() && entry.name === 'Package.swift') {
-                results.push(path.join(dir, entry.name));
             }
         }
     }
 
     scan(rootDir);
+}
+
+/**
+ * Recursively finds Package.swift manifests under `rootDir`. `excludeDir`, when given, is
+ * skipped entirely — used to keep the action's own temporary_packages_dir_path (whatever it
+ * is configured to) out of the scan, since it may sit under the project root.
+ */
+function findPackageSwiftFiles(rootDir: string, excludeDir?: string): string[] {
+    const results: string[] = [];
+    walkDirs(rootDir, excludeDir, (dir, entries) => {
+        for (const entry of entries) {
+            if (entry.isFile() && entry.name === 'Package.swift') {
+                results.push(path.join(dir, entry.name));
+            }
+        }
+    });
     return results;
 }
 
 /**
  * Extracts all `.keyword(...)` blocks from Package.swift content using bracket counting.
  * Handles `.testTarget` vs `.target` correctly — `.target` won't match `.testTarget`
- * because Swift uses camelCase (`.testTarget`, not `.targetTest`).
+ * because Swift uses camelCase (`.testTarget`, not `.targetTest`). Parentheses inside string
+ * literals and `//` / `/* *‍/` comments are ignored so they cannot unbalance the count.
  */
 function extractBlocks(content: string, keyword: string): string[] {
     const blocks: string[] = [];
@@ -163,10 +258,37 @@ function extractBlocks(content: string, keyword: string): string[] {
     while ((match = pattern.exec(content)) !== null) {
         let depth = 1;
         let i = match.index + match[0].length;
+        let inString = false;
+        let inLineComment = false;
+        let inBlockComment = false;
 
         while (i < content.length && depth > 0) {
-            if (content[i] === '(') depth++;
-            else if (content[i] === ')') depth--;
+            const ch = content[i];
+            const next = content[i + 1];
+
+            if (inLineComment) {
+                if (ch === '\n') inLineComment = false;
+            } else if (inBlockComment) {
+                if (ch === '*' && next === '/') {
+                    inBlockComment = false;
+                    i++;
+                }
+            } else if (inString) {
+                if (ch === '\\') i++;
+                else if (ch === '"') inString = false;
+            } else if (ch === '/' && next === '/') {
+                inLineComment = true;
+                i++;
+            } else if (ch === '/' && next === '*') {
+                inBlockComment = true;
+                i++;
+            } else if (ch === '"') {
+                inString = true;
+            } else if (ch === '(') {
+                depth++;
+            } else if (ch === ')') {
+                depth--;
+            }
             i++;
         }
 
@@ -176,24 +298,48 @@ function extractBlocks(content: string, keyword: string): string[] {
     return blocks;
 }
 
-/** Returns package identities referenced via `.product(name:, package:)` in a block. */
-function productPackageRefs(block: string): string[] {
-    return [...block.matchAll(/\.product\s*\([^)]*package:\s*"([^"]+)"/g)].map(([, pkg]) => pkg.toLowerCase());
-}
-
-/** Returns package identities referenced via `.plugin(name:, package:)` in a block. */
-function pluginPackageRefs(block: string): string[] {
-    return [...block.matchAll(/\.plugin\s*\([^)]*package:\s*"([^"]+)"/g)].map(([, pkg]) => pkg.toLowerCase());
+/** Returns package identities referenced via `.product(name:, package:)` or `.plugin(name:, package:)` in a block. */
+function packageRefs(block: string, kind: 'product' | 'plugin'): string[] {
+    const pattern = new RegExp(`\\.${kind}\\s*\\([^)]*package:\\s*"([^"]+)"`, 'g');
+    return [...block.matchAll(pattern)].map(([, pkg]) => pkg.toLowerCase());
 }
 
 /** Derives SPM identity (lowercase repo name) from a remote repository URL. */
 function identityFromUrl(url: string): string {
     return url
-        .replace(/\.git\s*$/, '')
         .replace(/\/+$/, '')
-        .split('/')
+        .replace(/\.git$/, '')
+        .split(/[/:]/)
         .pop()!
         .toLowerCase();
+}
+
+/**
+ * Splits a pbxproj's `objects = { ... }` section into individual `id /* comment *‍/ = { ... };`
+ * object blocks using bracket counting. Parsing each object as its own bounded block (rather
+ * than one flat regex spanning the whole file) prevents a target with no packageProductDependencies
+ * from bleeding into the next target's fields.
+ */
+function extractPbxObjectBlocks(content: string): string[] {
+    const blocks: string[] = [];
+    const headerPattern = /\w{24} \/\* [^*]*\*\/ = \{/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = headerPattern.exec(content)) !== null) {
+        let depth = 1;
+        let i = match.index + match[0].length;
+
+        while (i < content.length && depth > 0) {
+            if (content[i] === '{') depth++;
+            else if (content[i] === '}') depth--;
+            i++;
+        }
+
+        blocks.push(content.slice(match.index, i));
+        headerPattern.lastIndex = i;
+    }
+
+    return blocks;
 }
 
 /**
@@ -233,16 +379,21 @@ export function detectXcodeDevPackages(pbxprojPath: string): { devRefs: Set<stri
         }
     }
 
-    // PBXNativeTarget → classify product deps
+    // PBXNativeTarget → classify product deps, one bounded object block at a time.
     const devRefs = new Set<string>();
     const appRefs = new Set<string>();
 
-    for (const m of content.matchAll(
-        /isa = PBXNativeTarget;.*?name = ([^;]+);.*?packageProductDependencies = \(([^)]*)\)/gs
-    )) {
-        const rawName = m[1].trim().replace(/^"|"$/g, '');
+    for (const block of extractPbxObjectBlocks(content)) {
+        if (!/isa\s*=\s*PBXNativeTarget;/.test(block)) continue;
+
+        const nameMatch = /name\s*=\s*([^;]+);/.exec(block);
+        const depsMatch = /packageProductDependencies\s*=\s*\(([^)]*)\)/.exec(block);
+        if (!nameMatch || !depsMatch) continue;
+
+        const rawName = nameMatch[1].trim().replace(/^"|"$/g, '');
         const isTestTarget = rawName.endsWith('Tests');
-        for (const depId of m[2].matchAll(/(\w{24})/g)) {
+
+        for (const depId of depsMatch[1].matchAll(/(\w{24})/g)) {
             const identity = prodDepToIdentity.get(depId[1]);
             if (identity) {
                 (isTestTarget ? devRefs : appRefs).add(identity);
@@ -261,38 +412,36 @@ export function detectXcodeDevPackages(pbxprojPath: string): { devRefs: Set<stri
     return { devRefs, appRefs };
 }
 
-function findPbxprojFiles(rootDir: string): string[] {
+/** Recursively finds project.pbxproj files under `rootDir`, skipping `excludeDir` (e.g. the SPM checkouts dir). */
+function findPbxprojFiles(rootDir: string, excludeDir?: string): string[] {
     const results: string[] = [];
-    let entries: fs.Dirent[];
-    try {
-        entries = fs.readdirSync(rootDir, { withFileTypes: true });
-    } catch {
-        return results;
-    }
-    for (const entry of entries) {
-        if (entry.isDirectory() && entry.name.endsWith('.xcodeproj')) {
-            const candidate = path.join(rootDir, entry.name, 'project.pbxproj');
-            const pbxprojExists = fs.existsSync(candidate);
-            if (pbxprojExists) {
-                results.push(candidate);
+    walkDirs(rootDir, excludeDir, (dir, entries) => {
+        for (const entry of entries) {
+            if (entry.isDirectory() && entry.name.endsWith('.xcodeproj')) {
+                const candidate = path.join(dir, entry.name, 'project.pbxproj');
+                if (fs.existsSync(candidate)) results.push(candidate);
             }
         }
-    }
+    });
     return results;
 }
+
+/** Non-test target kinds that count as app (production) targets for dev-package detection. */
+const APP_TARGET_KEYWORDS = ['target', 'executableTarget', 'macro'];
 
 /**
  * Scans Package.swift files and project.pbxproj files in `projectRoot` and returns
  * identities that are referenced exclusively in test targets or as build tool plugins —
- * never in regular app targets.
+ * never in regular app targets. `excludeDir`, when given, is skipped during the scan (e.g.
+ * the action's own temporary_packages_dir_path, whose cloned checkouts are not project sources).
  * Falls back gracefully: if parsing yields no results the set is empty (no false positives).
  */
-export function detectDevPackages(resolvedFilePath: string, projectRoot: string): Set<string> {
+export function detectDevPackages(resolvedFilePath: string, projectRoot: string, excludeDir?: string): Set<string> {
     const devRefs = new Set<string>();
     const appRefs = new Set<string>();
 
     // ── Package.swift scan ──────────────────────────────────────────────────
-    for (const filePath of findPackageSwiftFiles(projectRoot)) {
+    for (const filePath of findPackageSwiftFiles(projectRoot, excludeDir)) {
         let content: string;
         try {
             content = fs.readFileSync(filePath, 'utf8');
@@ -301,19 +450,21 @@ export function detectDevPackages(resolvedFilePath: string, projectRoot: string)
         }
 
         for (const block of extractBlocks(content, 'testTarget')) {
-            for (const ref of productPackageRefs(block)) devRefs.add(ref);
+            for (const ref of packageRefs(block, 'product')) devRefs.add(ref);
         }
 
-        for (const block of extractBlocks(content, 'target')) {
-            for (const ref of productPackageRefs(block)) appRefs.add(ref);
-            for (const [, pluginsBlock] of block.matchAll(/plugins\s*:\s*\[([^\]]*)\]/gs)) {
-                for (const ref of pluginPackageRefs(pluginsBlock)) devRefs.add(ref);
+        for (const keyword of APP_TARGET_KEYWORDS) {
+            for (const block of extractBlocks(content, keyword)) {
+                for (const ref of packageRefs(block, 'product')) appRefs.add(ref);
+                for (const [, pluginsBlock] of block.matchAll(/plugins\s*:\s*\[([^\]]*)\]/gs)) {
+                    for (const ref of packageRefs(pluginsBlock, 'plugin')) devRefs.add(ref);
+                }
             }
         }
     }
 
     // ── project.pbxproj scan ────────────────────────────────────────────────
-    for (const pbxprojPath of findPbxprojFiles(projectRoot)) {
+    for (const pbxprojPath of findPbxprojFiles(projectRoot, excludeDir)) {
         const { devRefs: pbxDev, appRefs: pbxApp } = detectXcodeDevPackages(pbxprojPath);
         for (const ref of pbxDev) devRefs.add(ref);
         for (const ref of pbxApp) appRefs.add(ref);
@@ -354,12 +505,12 @@ function manifestPackageDeps(content: string): string[] {
  * Returns the project's direct SPM dependencies (the graph roots): every package the
  * project itself references, gathered from project.pbxproj remote references and from
  * Package.swift manifests located in the project root. Only identities present in
- * Package.resolved are kept.
+ * Package.resolved are kept. `excludeDir`, when given, is skipped during the scan.
  */
-export function getDirectDependencies(resolvedSet: Set<string>, projectRoot: string): Set<string> {
+export function getDirectDependencies(resolvedSet: Set<string>, projectRoot: string, excludeDir?: string): Set<string> {
     const direct = new Set<string>();
 
-    for (const filePath of findPackageSwiftFiles(projectRoot)) {
+    for (const filePath of findPackageSwiftFiles(projectRoot, excludeDir)) {
         let content: string;
         try {
             content = fs.readFileSync(filePath, 'utf8');
@@ -371,7 +522,7 @@ export function getDirectDependencies(resolvedSet: Set<string>, projectRoot: str
         }
     }
 
-    for (const pbxprojPath of findPbxprojFiles(projectRoot)) {
+    for (const pbxprojPath of findPbxprojFiles(projectRoot, excludeDir)) {
         const { devRefs, appRefs } = detectXcodeDevPackages(pbxprojPath);
         for (const ref of [...devRefs, ...appRefs]) {
             if (resolvedSet.has(ref)) direct.add(ref);
@@ -470,10 +621,11 @@ export function generateMermaidGraph(
 export function buildDependencyGraph(
     afterInfo: Map<string, PackageInfo>,
     projectRoot: string,
-    checkoutsDir: string
+    checkoutsDir: string,
+    excludeDir?: string
 ): string {
     const resolvedSet = new Set(afterInfo.keys());
-    const directDeps = getDirectDependencies(resolvedSet, projectRoot);
+    const directDeps = getDirectDependencies(resolvedSet, projectRoot, excludeDir);
     const edges = getDependencyEdges(checkoutsDir, resolvedSet);
     return generateMermaidGraph(afterInfo, directDeps, edges);
 }
@@ -506,36 +658,50 @@ const HTML_STYLES = `
   pre.mermaid { background: #fff; line-height: 1.4; }
 `.trim();
 
+type ChangeKind = 'added' | 'removed' | 'updated';
+
+/** Builds an identity → change-kind lookup once, replacing repeated Array.includes scans per row. */
+function classifyChanges(compare: CompareResult): Map<string, ChangeKind> {
+    const kinds = new Map<string, ChangeKind>();
+    for (const identity of compare.added) kinds.set(identity, 'added');
+    for (const identity of compare.removed) kinds.set(identity, 'removed');
+    for (const identity of compare.updated) kinds.set(identity, 'updated');
+    return kinds;
+}
+
 function typeBadge(identity: string, devPackages: Set<string>): string {
     return devPackages.has(identity)
         ? '<span class="badge badge-dev">🛠 Development</span>'
         : '<span class="badge badge-app">📦 App</span>';
 }
 
-function changeBadge(identity: string, compare: CompareResult): string {
-    if (compare.added.includes(identity)) return '<span class="badge badge-added">✨ added</span>';
-    if (compare.removed.includes(identity)) return '<span class="badge badge-removed">🗑 removed</span>';
-    if (compare.updated.includes(identity)) return '<span class="badge badge-updated">⬆ updated</span>';
-    return '';
+function changeBadge(kind: ChangeKind | undefined): string {
+    switch (kind) {
+        case 'added':
+            return '<span class="badge badge-added">✨ added</span>';
+        case 'removed':
+            return '<span class="badge badge-removed">🗑 removed</span>';
+        case 'updated':
+            return '<span class="badge badge-updated">⬆ updated</span>';
+        default:
+            return '';
+    }
 }
 
-function rowClass(identity: string, compare: CompareResult): string {
-    if (compare.added.includes(identity)) return ' class="added"';
-    if (compare.removed.includes(identity)) return ' class="removed"';
-    if (compare.updated.includes(identity)) return ' class="updated"';
-    return '';
+function rowClass(kind: ChangeKind | undefined): string {
+    return kind ? ` class="${kind}"` : '';
 }
 
 function versionCell(
     identity: string,
     beforeInfo: Map<string, PackageInfo>,
     afterInfo: Map<string, PackageInfo>,
-    compare: CompareResult
+    kind: ChangeKind | undefined
 ): string {
     const beforeVersion = beforeInfo.get(identity)?.version ?? '';
     const afterVersion = afterInfo.get(identity)?.version ?? '';
 
-    if (compare.updated.includes(identity) && beforeVersion && afterVersion && beforeVersion !== afterVersion) {
+    if (kind === 'updated' && beforeVersion && afterVersion && beforeVersion !== afterVersion) {
         return `${escapeHtml(beforeVersion)}<span class="version-arrow">→</span>${escapeHtml(afterVersion)}`;
     }
     return escapeHtml(afterVersion || beforeVersion);
@@ -544,6 +710,12 @@ function versionCell(
 function latestCell(identity: string, latest: Map<string, string>): string {
     const version = latest.get(identity);
     return version ? `<code>${escapeHtml(version)}</code>` : '—';
+}
+
+/** Only renders http(s) URLs as clickable links — a `javascript:`/`data:` location stays plain text. */
+function urlCell(identity: string, url: string): string {
+    if (!/^https?:\/\//i.test(url)) return escapeHtml(identity);
+    return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(identity)}</a>`;
 }
 
 export function generateHtmlReport(
@@ -555,21 +727,20 @@ export function generateHtmlReport(
     mermaid: string = ''
 ): string {
     const allIdentities = [...new Set([...beforeInfo.keys(), ...afterInfo.keys()])].sort();
+    const changes = classifyChanges(compare);
 
     const rows = allIdentities
         .map((identity) => {
             const info = afterInfo.get(identity) ?? beforeInfo.get(identity)!;
-            const urlCell = info.url
-                ? `<a href="${escapeHtml(info.url)}" target="_blank">${escapeHtml(identity)}</a>`
-                : escapeHtml(identity);
+            const kind = changes.get(identity);
 
             return [
-                `<tr${rowClass(identity, compare)}>`,
-                `  <td>${urlCell}</td>`,
-                `  <td><code>${versionCell(identity, beforeInfo, afterInfo, compare)}</code></td>`,
+                `<tr${rowClass(kind)}>`,
+                `  <td>${urlCell(identity, info.url)}</td>`,
+                `  <td><code>${versionCell(identity, beforeInfo, afterInfo, kind)}</code></td>`,
                 `  <td>${latestCell(identity, latest)}</td>`,
                 `  <td>${typeBadge(identity, devPackages)}</td>`,
-                `  <td>${changeBadge(identity, compare)}</td>`,
+                `  <td>${changeBadge(kind)}</td>`,
                 `</tr>`
             ].join('\n');
         })
@@ -639,9 +810,36 @@ function escapeHtml(str: string): string {
 
 // ─── CycloneDX SBOM ──────────────────────────────────────────────────────────
 
-function buildPurl(identity: string, version: string, url: string): string {
+// Replaced with a literal version string by esbuild's --define at build time (see package.json).
+declare const __PACKAGE_VERSION__: string | undefined;
+
+/** Reads this package's own version from package.json — used only when __PACKAGE_VERSION__ wasn't injected (e.g. tests). */
+function readOwnPackageVersion(): string {
     try {
-        const parsed = new URL(url);
+        const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')) as {
+            version?: string;
+        };
+        return pkg.version ?? '0.0.0';
+    } catch {
+        return '0.0.0';
+    }
+}
+
+/** Resolved lazily (not at module load) so importing this module never touches the filesystem. */
+function getToolVersion(): string {
+    return typeof __PACKAGE_VERSION__ !== 'undefined' ? __PACKAGE_VERSION__ : readOwnPackageVersion();
+}
+
+/** Normalizes an scp-style git URL (git@host:org/repo.git) into a form new URL() can parse. */
+function normalizeGitUrl(url: string): string {
+    const scpMatch = /^([\w.-]+)@([\w.-]+):(.+)$/.exec(url);
+    return scpMatch ? `ssh://${scpMatch[1]}@${scpMatch[2]}/${scpMatch[3]}` : url;
+}
+
+function buildPurl(identity: string, version: string, url: string): string {
+    const versionSuffix = version ? `@${encodeURIComponent(version)}` : '';
+    try {
+        const parsed = new URL(normalizeGitUrl(url));
         const host = parsed.hostname;
         const pathParts = parsed.pathname
             .replace(/^\/|\.git$/g, '')
@@ -650,12 +848,12 @@ function buildPurl(identity: string, version: string, url: string): string {
         if (pathParts.length >= 2) {
             const namespace = [host, ...pathParts.slice(0, -1)].join('/');
             const name = pathParts[pathParts.length - 1];
-            return `pkg:swift/${namespace}/${name}@${version}`;
+            return `pkg:swift/${namespace}/${name}${versionSuffix}`;
         }
     } catch {
         // fall through
     }
-    return `pkg:swift/${identity}@${version}`;
+    return `pkg:swift/${identity}${versionSuffix}`;
 }
 
 export function generateSbom(afterInfo: Map<string, PackageInfo>, devPackages: Set<string> = new Set()): string {
@@ -675,7 +873,7 @@ export function generateSbom(afterInfo: Map<string, PackageInfo>, devPackages: S
         version: 1,
         metadata: {
             timestamp: new Date().toISOString(),
-            tools: [{ name: 'xcode-packages-update', version: '1.0.0' }]
+            tools: [{ name: 'xcode-packages-update', version: getToolVersion() }]
         },
         components
     };

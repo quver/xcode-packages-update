@@ -19990,6 +19990,7 @@ function saveState(name, value) {
 
 // src/main.ts
 var import_fs3 = __toESM(require("fs"), 1);
+var import_os3 = __toESM(require("os"), 1);
 var import_path2 = __toESM(require("path"), 1);
 
 // src/packages.ts
@@ -19999,10 +20000,23 @@ var import_crypto = require("crypto");
 function parseResolved(filePath) {
   const content = import_fs2.default.readFileSync(filePath, "utf8");
   const parsed = JSON.parse(content);
-  return parsed.pins ?? [];
+  if ("object" in parsed) {
+    const pins = parsed.object?.pins;
+    if (!Array.isArray(pins)) return [];
+    return pins.map((pin) => ({
+      identity: identityFromUrl(pin.repositoryURL),
+      location: pin.repositoryURL,
+      state: pin.state ?? void 0
+    }));
+  }
+  return Array.isArray(parsed.pins) ? parsed.pins : [];
 }
 function resolveVersion(state) {
-  return state?.version ?? state?.branch ?? state?.revision ?? "";
+  if (state?.version) return state.version;
+  if (state?.branch) {
+    return state.revision ? `${state.branch}+${state.revision.slice(0, 7)}` : state.branch;
+  }
+  return state?.revision ?? "";
 }
 function getPackages(filePath) {
   const pins = parseResolved(filePath);
@@ -20038,19 +20052,53 @@ function selectLatestStableVersion(tags) {
   }
   return best ? best.join(".") : "";
 }
+var GIT_LS_REMOTE_CONCURRENCY = 8;
+var GIT_LS_REMOTE_TIMEOUT_MS = 15e3;
+var REFS_TAGS_PREFIX = "refs/tags/";
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+function withTimeout(promise, ms, fallback) {
+  promise.catch(() => {
+  });
+  return new Promise((resolve2) => {
+    const timer = setTimeout(() => resolve2(fallback), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve2(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve2(fallback);
+      }
+    );
+  });
+}
 async function getLatestVersions(afterInfo, runGit) {
   const entries = [...afterInfo.entries()].filter(([, info2]) => info2.url);
-  const results = await Promise.all(
-    entries.map(async ([identity, info2]) => {
-      try {
-        const stdout = await runGit("git", ["ls-remote", "--tags", "--refs", info2.url]);
-        const tags = stdout.split("\n").map((line) => line.slice(line.lastIndexOf("/") + 1).trim()).filter(Boolean);
-        return [identity, selectLatestStableVersion(tags)];
-      } catch {
-        return [identity, ""];
-      }
-    })
-  );
+  const results = await mapWithConcurrency(entries, GIT_LS_REMOTE_CONCURRENCY, async ([identity, info2]) => {
+    try {
+      const stdout = await withTimeout(
+        runGit("git", ["ls-remote", "--tags", "--refs", "--", info2.url]),
+        GIT_LS_REMOTE_TIMEOUT_MS,
+        ""
+      );
+      const tags = stdout.split("\n").map((line) => line.slice(line.indexOf("	") + 1).trim()).filter((ref) => ref.startsWith(REFS_TAGS_PREFIX)).map((ref) => ref.slice(REFS_TAGS_PREFIX.length));
+      return [identity, selectLatestStableVersion(tags)];
+    } catch {
+      return [identity, ""];
+    }
+  });
   return new Map(results.filter(([, version]) => version));
 }
 function comparePackages(before, after) {
@@ -20060,24 +20108,34 @@ function comparePackages(before, after) {
   return { removed, added, updated };
 }
 var EXCLUDE_DIRS = /* @__PURE__ */ new Set([".build", "node_modules", ".git", "DerivedData", ".spm-tmp", ".swiftpm"]);
-function findPackageSwiftFiles(rootDir) {
-  const results = [];
+function walkDirs(rootDir, excludeDir, visit) {
+  const resolvedExclude = excludeDir ? import_path.default.resolve(excludeDir) : void 0;
   function scan(dir) {
+    if (resolvedExclude && import_path.default.resolve(dir) === resolvedExclude) return;
     let entries;
     try {
       entries = import_fs2.default.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
+    visit(dir, entries);
     for (const entry of entries) {
       if (entry.isDirectory() && !EXCLUDE_DIRS.has(entry.name)) {
         scan(import_path.default.join(dir, entry.name));
-      } else if (entry.isFile() && entry.name === "Package.swift") {
-        results.push(import_path.default.join(dir, entry.name));
       }
     }
   }
   scan(rootDir);
+}
+function findPackageSwiftFiles(rootDir, excludeDir) {
+  const results = [];
+  walkDirs(rootDir, excludeDir, (dir, entries) => {
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name === "Package.swift") {
+        results.push(import_path.default.join(dir, entry.name));
+      }
+    }
+  });
   return results;
 }
 function extractBlocks(content, keyword) {
@@ -20087,23 +20145,64 @@ function extractBlocks(content, keyword) {
   while ((match = pattern.exec(content)) !== null) {
     let depth = 1;
     let i = match.index + match[0].length;
+    let inString = false;
+    let inLineComment = false;
+    let inBlockComment = false;
     while (i < content.length && depth > 0) {
-      if (content[i] === "(") depth++;
-      else if (content[i] === ")") depth--;
+      const ch = content[i];
+      const next = content[i + 1];
+      if (inLineComment) {
+        if (ch === "\n") inLineComment = false;
+      } else if (inBlockComment) {
+        if (ch === "*" && next === "/") {
+          inBlockComment = false;
+          i++;
+        }
+      } else if (inString) {
+        if (ch === "\\") i++;
+        else if (ch === '"') inString = false;
+      } else if (ch === "/" && next === "/") {
+        inLineComment = true;
+        i++;
+      } else if (ch === "/" && next === "*") {
+        inBlockComment = true;
+        i++;
+      } else if (ch === '"') {
+        inString = true;
+      } else if (ch === "(") {
+        depth++;
+      } else if (ch === ")") {
+        depth--;
+      }
       i++;
     }
     blocks.push(content.slice(match.index + match[0].length, i - 1));
   }
   return blocks;
 }
-function productPackageRefs(block) {
-  return [...block.matchAll(/\.product\s*\([^)]*package:\s*"([^"]+)"/g)].map(([, pkg]) => pkg.toLowerCase());
-}
-function pluginPackageRefs(block) {
-  return [...block.matchAll(/\.plugin\s*\([^)]*package:\s*"([^"]+)"/g)].map(([, pkg]) => pkg.toLowerCase());
+function packageRefs(block, kind) {
+  const pattern = new RegExp(`\\.${kind}\\s*\\([^)]*package:\\s*"([^"]+)"`, "g");
+  return [...block.matchAll(pattern)].map(([, pkg]) => pkg.toLowerCase());
 }
 function identityFromUrl(url) {
-  return url.replace(/\.git\s*$/, "").replace(/\/+$/, "").split("/").pop().toLowerCase();
+  return url.replace(/\/+$/, "").replace(/\.git$/, "").split(/[/:]/).pop().toLowerCase();
+}
+function extractPbxObjectBlocks(content) {
+  const blocks = [];
+  const headerPattern = /\w{24} \/\* [^*]*\*\/ = \{/g;
+  let match;
+  while ((match = headerPattern.exec(content)) !== null) {
+    let depth = 1;
+    let i = match.index + match[0].length;
+    while (i < content.length && depth > 0) {
+      if (content[i] === "{") depth++;
+      else if (content[i] === "}") depth--;
+      i++;
+    }
+    blocks.push(content.slice(match.index, i));
+    headerPattern.lastIndex = i;
+  }
+  return blocks;
 }
 function detectXcodeDevPackages(pbxprojPath) {
   let content;
@@ -20130,12 +20229,14 @@ function detectXcodeDevPackages(pbxprojPath) {
   }
   const devRefs = /* @__PURE__ */ new Set();
   const appRefs = /* @__PURE__ */ new Set();
-  for (const m of content.matchAll(
-    /isa = PBXNativeTarget;.*?name = ([^;]+);.*?packageProductDependencies = \(([^)]*)\)/gs
-  )) {
-    const rawName = m[1].trim().replace(/^"|"$/g, "");
+  for (const block of extractPbxObjectBlocks(content)) {
+    if (!/isa\s*=\s*PBXNativeTarget;/.test(block)) continue;
+    const nameMatch = /name\s*=\s*([^;]+);/.exec(block);
+    const depsMatch = /packageProductDependencies\s*=\s*\(([^)]*)\)/.exec(block);
+    if (!nameMatch || !depsMatch) continue;
+    const rawName = nameMatch[1].trim().replace(/^"|"$/g, "");
     const isTestTarget = rawName.endsWith("Tests");
-    for (const depId of m[2].matchAll(/(\w{24})/g)) {
+    for (const depId of depsMatch[1].matchAll(/(\w{24})/g)) {
       const identity = prodDepToIdentity.get(depId[1]);
       if (identity) {
         (isTestTarget ? devRefs : appRefs).add(identity);
@@ -20149,29 +20250,23 @@ function detectXcodeDevPackages(pbxprojPath) {
   }
   return { devRefs, appRefs };
 }
-function findPbxprojFiles(rootDir) {
+function findPbxprojFiles(rootDir, excludeDir) {
   const results = [];
-  let entries;
-  try {
-    entries = import_fs2.default.readdirSync(rootDir, { withFileTypes: true });
-  } catch {
-    return results;
-  }
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.endsWith(".xcodeproj")) {
-      const candidate = import_path.default.join(rootDir, entry.name, "project.pbxproj");
-      const pbxprojExists = import_fs2.default.existsSync(candidate);
-      if (pbxprojExists) {
-        results.push(candidate);
+  walkDirs(rootDir, excludeDir, (dir, entries) => {
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name.endsWith(".xcodeproj")) {
+        const candidate = import_path.default.join(dir, entry.name, "project.pbxproj");
+        if (import_fs2.default.existsSync(candidate)) results.push(candidate);
       }
     }
-  }
+  });
   return results;
 }
-function detectDevPackages(resolvedFilePath, projectRoot) {
+var APP_TARGET_KEYWORDS = ["target", "executableTarget", "macro"];
+function detectDevPackages(resolvedFilePath, projectRoot, excludeDir) {
   const devRefs = /* @__PURE__ */ new Set();
   const appRefs = /* @__PURE__ */ new Set();
-  for (const filePath of findPackageSwiftFiles(projectRoot)) {
+  for (const filePath of findPackageSwiftFiles(projectRoot, excludeDir)) {
     let content;
     try {
       content = import_fs2.default.readFileSync(filePath, "utf8");
@@ -20179,16 +20274,18 @@ function detectDevPackages(resolvedFilePath, projectRoot) {
       continue;
     }
     for (const block of extractBlocks(content, "testTarget")) {
-      for (const ref of productPackageRefs(block)) devRefs.add(ref);
+      for (const ref of packageRefs(block, "product")) devRefs.add(ref);
     }
-    for (const block of extractBlocks(content, "target")) {
-      for (const ref of productPackageRefs(block)) appRefs.add(ref);
-      for (const [, pluginsBlock] of block.matchAll(/plugins\s*:\s*\[([^\]]*)\]/gs)) {
-        for (const ref of pluginPackageRefs(pluginsBlock)) devRefs.add(ref);
+    for (const keyword of APP_TARGET_KEYWORDS) {
+      for (const block of extractBlocks(content, keyword)) {
+        for (const ref of packageRefs(block, "product")) appRefs.add(ref);
+        for (const [, pluginsBlock] of block.matchAll(/plugins\s*:\s*\[([^\]]*)\]/gs)) {
+          for (const ref of packageRefs(pluginsBlock, "plugin")) devRefs.add(ref);
+        }
       }
     }
   }
-  for (const pbxprojPath of findPbxprojFiles(projectRoot)) {
+  for (const pbxprojPath of findPbxprojFiles(projectRoot, excludeDir)) {
     const { devRefs: pbxDev, appRefs: pbxApp } = detectXcodeDevPackages(pbxprojPath);
     for (const ref of pbxDev) devRefs.add(ref);
     for (const ref of pbxApp) appRefs.add(ref);
@@ -20210,9 +20307,9 @@ function manifestPackageDeps(content) {
   }
   return deps;
 }
-function getDirectDependencies(resolvedSet, projectRoot) {
+function getDirectDependencies(resolvedSet, projectRoot, excludeDir) {
   const direct = /* @__PURE__ */ new Set();
-  for (const filePath of findPackageSwiftFiles(projectRoot)) {
+  for (const filePath of findPackageSwiftFiles(projectRoot, excludeDir)) {
     let content;
     try {
       content = import_fs2.default.readFileSync(filePath, "utf8");
@@ -20223,7 +20320,7 @@ function getDirectDependencies(resolvedSet, projectRoot) {
       if (resolvedSet.has(ref)) direct.add(ref);
     }
   }
-  for (const pbxprojPath of findPbxprojFiles(projectRoot)) {
+  for (const pbxprojPath of findPbxprojFiles(projectRoot, excludeDir)) {
     const { devRefs, appRefs } = detectXcodeDevPackages(pbxprojPath);
     for (const ref of [...devRefs, ...appRefs]) {
       if (resolvedSet.has(ref)) direct.add(ref);
@@ -20281,9 +20378,9 @@ function generateMermaidGraph(afterInfo, directDeps, edges) {
   lines.push("  classDef direct fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;");
   return lines.join("\n");
 }
-function buildDependencyGraph(afterInfo, projectRoot, checkoutsDir) {
+function buildDependencyGraph(afterInfo, projectRoot, checkoutsDir, excludeDir) {
   const resolvedSet = new Set(afterInfo.keys());
-  const directDeps = getDirectDependencies(resolvedSet, projectRoot);
+  const directDeps = getDirectDependencies(resolvedSet, projectRoot, excludeDir);
   const edges = getDependencyEdges(checkoutsDir, resolvedSet);
   return generateMermaidGraph(afterInfo, directDeps, edges);
 }
@@ -20312,25 +20409,35 @@ var HTML_STYLES = `
   .graph-legend { font-size: 0.8rem; color: #6e6e73; margin-bottom: 0.75rem; }
   pre.mermaid { background: #fff; line-height: 1.4; }
 `.trim();
+function classifyChanges(compare) {
+  const kinds = /* @__PURE__ */ new Map();
+  for (const identity of compare.added) kinds.set(identity, "added");
+  for (const identity of compare.removed) kinds.set(identity, "removed");
+  for (const identity of compare.updated) kinds.set(identity, "updated");
+  return kinds;
+}
 function typeBadge(identity, devPackages) {
   return devPackages.has(identity) ? '<span class="badge badge-dev">\u{1F6E0} Development</span>' : '<span class="badge badge-app">\u{1F4E6} App</span>';
 }
-function changeBadge(identity, compare) {
-  if (compare.added.includes(identity)) return '<span class="badge badge-added">\u2728 added</span>';
-  if (compare.removed.includes(identity)) return '<span class="badge badge-removed">\u{1F5D1} removed</span>';
-  if (compare.updated.includes(identity)) return '<span class="badge badge-updated">\u2B06 updated</span>';
-  return "";
+function changeBadge(kind) {
+  switch (kind) {
+    case "added":
+      return '<span class="badge badge-added">\u2728 added</span>';
+    case "removed":
+      return '<span class="badge badge-removed">\u{1F5D1} removed</span>';
+    case "updated":
+      return '<span class="badge badge-updated">\u2B06 updated</span>';
+    default:
+      return "";
+  }
 }
-function rowClass(identity, compare) {
-  if (compare.added.includes(identity)) return ' class="added"';
-  if (compare.removed.includes(identity)) return ' class="removed"';
-  if (compare.updated.includes(identity)) return ' class="updated"';
-  return "";
+function rowClass(kind) {
+  return kind ? ` class="${kind}"` : "";
 }
-function versionCell(identity, beforeInfo, afterInfo, compare) {
+function versionCell(identity, beforeInfo, afterInfo, kind) {
   const beforeVersion = beforeInfo.get(identity)?.version ?? "";
   const afterVersion = afterInfo.get(identity)?.version ?? "";
-  if (compare.updated.includes(identity) && beforeVersion && afterVersion && beforeVersion !== afterVersion) {
+  if (kind === "updated" && beforeVersion && afterVersion && beforeVersion !== afterVersion) {
     return `${escapeHtml(beforeVersion)}<span class="version-arrow">\u2192</span>${escapeHtml(afterVersion)}`;
   }
   return escapeHtml(afterVersion || beforeVersion);
@@ -20339,18 +20446,23 @@ function latestCell(identity, latest) {
   const version = latest.get(identity);
   return version ? `<code>${escapeHtml(version)}</code>` : "\u2014";
 }
+function urlCell(identity, url) {
+  if (!/^https?:\/\//i.test(url)) return escapeHtml(identity);
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(identity)}</a>`;
+}
 function generateHtmlReport(beforeInfo, afterInfo, compare, devPackages = /* @__PURE__ */ new Set(), latest = /* @__PURE__ */ new Map(), mermaid = "") {
   const allIdentities = [.../* @__PURE__ */ new Set([...beforeInfo.keys(), ...afterInfo.keys()])].sort();
+  const changes = classifyChanges(compare);
   const rows = allIdentities.map((identity) => {
     const info2 = afterInfo.get(identity) ?? beforeInfo.get(identity);
-    const urlCell = info2.url ? `<a href="${escapeHtml(info2.url)}" target="_blank">${escapeHtml(identity)}</a>` : escapeHtml(identity);
+    const kind = changes.get(identity);
     return [
-      `<tr${rowClass(identity, compare)}>`,
-      `  <td>${urlCell}</td>`,
-      `  <td><code>${versionCell(identity, beforeInfo, afterInfo, compare)}</code></td>`,
+      `<tr${rowClass(kind)}>`,
+      `  <td>${urlCell(identity, info2.url)}</td>`,
+      `  <td><code>${versionCell(identity, beforeInfo, afterInfo, kind)}</code></td>`,
       `  <td>${latestCell(identity, latest)}</td>`,
       `  <td>${typeBadge(identity, devPackages)}</td>`,
-      `  <td>${changeBadge(identity, compare)}</td>`,
+      `  <td>${changeBadge(kind)}</td>`,
       `</tr>`
     ].join("\n");
   }).join("\n");
@@ -20407,19 +20519,27 @@ ${graphSection}
 function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+function getToolVersion() {
+  return true ? "3.1.5" : readOwnPackageVersion();
+}
+function normalizeGitUrl(url) {
+  const scpMatch = /^([\w.-]+)@([\w.-]+):(.+)$/.exec(url);
+  return scpMatch ? `ssh://${scpMatch[1]}@${scpMatch[2]}/${scpMatch[3]}` : url;
+}
 function buildPurl(identity, version, url) {
+  const versionSuffix = version ? `@${encodeURIComponent(version)}` : "";
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(normalizeGitUrl(url));
     const host = parsed.hostname;
     const pathParts = parsed.pathname.replace(/^\/|\.git$/g, "").split("/").filter(Boolean);
     if (pathParts.length >= 2) {
       const namespace = [host, ...pathParts.slice(0, -1)].join("/");
       const name = pathParts[pathParts.length - 1];
-      return `pkg:swift/${namespace}/${name}@${version}`;
+      return `pkg:swift/${namespace}/${name}${versionSuffix}`;
     }
   } catch {
   }
-  return `pkg:swift/${identity}@${version}`;
+  return `pkg:swift/${identity}${versionSuffix}`;
 }
 function generateSbom(afterInfo, devPackages = /* @__PURE__ */ new Set()) {
   const components = [...afterInfo.entries()].map(([identity, info2]) => ({
@@ -20437,7 +20557,7 @@ function generateSbom(afterInfo, devPackages = /* @__PURE__ */ new Set()) {
     version: 1,
     metadata: {
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      tools: [{ name: "xcode-packages-update", version: "1.0.0" }]
+      tools: [{ name: "xcode-packages-update", version: getToolVersion() }]
     },
     components
   };
@@ -20453,7 +20573,7 @@ function findSharedScheme(workspaceFile, scheme) {
   if (!import_fs3.default.existsSync(contentsPath)) return null;
   const contents = import_fs3.default.readFileSync(contentsPath, "utf8");
   const workspaceDir = import_path2.default.dirname(workspaceFile);
-  for (const [, ref] of contents.matchAll(/location\s*=\s*"container:([^"]+)"/g)) {
+  for (const [, ref] of contents.matchAll(/location\s*=\s*"(?:container|group):([^"]+)"/g)) {
     const projectSchemePath = import_path2.default.join(workspaceDir, ref, "xcshareddata", "xcschemes", schemeFilename);
     if (import_fs3.default.existsSync(projectSchemePath)) return projectSchemePath;
   }
@@ -20461,13 +20581,24 @@ function findSharedScheme(workspaceFile, scheme) {
 }
 function parseDevPackages(input) {
   return new Set(
-    input.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
+    input.split(/[\n,]/).map((s) => s.trim().toLowerCase()).filter(Boolean)
   );
 }
 function writeToPath(filePath, content) {
   const dir = import_path2.default.dirname(import_path2.default.resolve(filePath));
   import_fs3.default.mkdirSync(dir, { recursive: true });
   import_fs3.default.writeFileSync(filePath, content, "utf8");
+}
+function assertSafeTempDir(tempDir) {
+  const resolved = import_path2.default.resolve(tempDir);
+  const cwd = process.cwd();
+  const relative2 = import_path2.default.relative(cwd, resolved);
+  const escapesWorkspace = relative2 === "" || relative2.startsWith("..") || import_path2.default.isAbsolute(relative2);
+  if (escapesWorkspace) {
+    throw new Error(
+      `temporary_packages_dir_path ("${tempDir}") must resolve to a subdirectory inside the workspace, not "${resolved}".`
+    );
+  }
 }
 async function run() {
   const projectFile = getInput("project_file");
@@ -20500,48 +20631,44 @@ async function run() {
     }
   }
   const packageResolved = workspaceFile ? `${workspaceFile}/xcshareddata/swiftpm/Package.resolved` : `${projectFile}/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`;
-  const currentPackage = import_path2.default.join(__dirname, "CurrentPackage.resolved");
+  const snapshotDir = process.env.RUNNER_TEMP || import_os3.default.tmpdir();
+  const currentPackage = import_path2.default.join(snapshotDir, "CurrentPackage.resolved");
+  assertSafeTempDir(tempDir);
   import_fs3.default.rmSync(tempDir, { recursive: true, force: true });
   saveState("temp_dir", tempDir);
   saveState("current_package", currentPackage);
-  import_fs3.default.renameSync(packageResolved, currentPackage);
+  const hadExistingResolved = import_fs3.default.existsSync(packageResolved);
+  if (hadExistingResolved) {
+    import_fs3.default.copyFileSync(packageResolved, currentPackage);
+  }
   import_fs3.default.mkdirSync(tempDir, { recursive: true });
-  const xcodebuildArgs = workspaceFile ? [
-    "-workspace",
-    workspaceFile,
-    "-scheme",
-    scheme,
-    "-resolvePackageDependencies",
-    "-disablePackageRepositoryCache",
-    "-clonedSourcePackagesDirPath",
-    tempDir
-  ] : [
-    "-project",
-    projectFile,
+  const xcodebuildArgs = [
+    ...workspaceFile ? ["-workspace", workspaceFile, "-scheme", scheme] : ["-project", projectFile],
     "-resolvePackageDependencies",
     "-disablePackageRepositoryCache",
     "-clonedSourcePackagesDirPath",
     tempDir
   ];
   await exec("xcodebuild", xcodebuildArgs);
-  const before = getPackages(currentPackage);
+  const before = hadExistingResolved ? getPackages(currentPackage) : /* @__PURE__ */ new Map();
   const after = getPackages(packageResolved);
   const { removed, added, updated } = comparePackages(before, after);
   if (htmlReportPath || sbomPath) {
     const projectRoot = import_path2.default.resolve(projectFile ? import_path2.default.dirname(projectFile) : import_path2.default.dirname(workspaceFile));
-    const devPackages = devPackagesInput ? parseDevPackages(devPackagesInput) : detectDevPackages(packageResolved, projectRoot);
-    const beforeInfo = getPackagesWithInfo(currentPackage);
+    const devPackages = devPackagesInput ? parseDevPackages(devPackagesInput) : detectDevPackages(packageResolved, projectRoot, tempDir);
+    const beforeInfo = hadExistingResolved ? getPackagesWithInfo(currentPackage) : /* @__PURE__ */ new Map();
     const afterInfo = getPackagesWithInfo(packageResolved);
     if (htmlReportPath) {
       const runGit = async (command, args) => {
         const { stdout } = await getExecOutput(command, args, {
           silent: true,
-          ignoreReturnCode: true
+          // Fail fast instead of hanging on a credential prompt for a private/moved repo.
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
         });
         return stdout;
       };
       const latest = await getLatestVersions(afterInfo, runGit);
-      const mermaid = buildDependencyGraph(afterInfo, projectRoot, import_path2.default.join(tempDir, "checkouts"));
+      const mermaid = buildDependencyGraph(afterInfo, projectRoot, import_path2.default.join(tempDir, "checkouts"), tempDir);
       const html = generateHtmlReport(
         beforeInfo,
         afterInfo,

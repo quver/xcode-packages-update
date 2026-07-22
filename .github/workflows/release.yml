@@ -42,19 +42,23 @@ jobs:
 
       - run: npm ci
 
-      - run: npm test
+      - run: npm run typecheck
 
-      - run: npm run build
+      - run: npm test
 
       - name: Bump version in package.json
         run: npm version ${{ inputs.version }} --no-git-tag-version
+
+      # Runs after the version bump so the SBOM tool version (injected via esbuild --define
+      # from $npm_package_version) and the built dist/ reflect the version being released.
+      - run: npm run build
 
       - name: Push release branch and open pull request
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
           git checkout -b release/v${{ inputs.version }}
-          git add dist/ package.json
+          git add dist/ package.json package-lock.json
           git commit -m "release: v${{ inputs.version }}"
           git push origin release/v${{ inputs.version }}
           gh pr create \
