@@ -111,7 +111,7 @@ export async function run(): Promise<void> {
         : `${projectFile}/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`;
 
     // RUNNER_TEMP is a per-job directory managed by the runner, unlike the action's own
-    // (shared, cached) install directory under __dirname.
+    // (shared, cached) install directory that a plain __dirname-based path would resolve to.
     const snapshotDir = process.env.RUNNER_TEMP || os.tmpdir();
     const currentPackage = path.join(snapshotDir, 'CurrentPackage.resolved');
 
@@ -120,12 +120,16 @@ export async function run(): Promise<void> {
 
     core.saveState('temp_dir', tempDir);
     core.saveState('current_package', currentPackage);
+    core.saveState('package_resolved_path', packageResolved);
 
-    // Copy (not move) so the workspace's Package.resolved is never left missing
-    // if xcodebuild or report generation fails before it gets rewritten.
+    // Move (not copy) the existing Package.resolved out of the way: xcodebuild only picks up
+    // newer compatible versions when there is no existing lockfile to satisfy, so this is what
+    // makes -resolvePackageDependencies actually surface available updates. If xcodebuild never
+    // gets to rewrite packageResolved (crash, error), the post step restores this snapshot back
+    // to packageResolvedPath instead of leaving the workspace with a missing file.
     const hadExistingResolved = fs.existsSync(packageResolved);
     if (hadExistingResolved) {
-        fs.copyFileSync(packageResolved, currentPackage);
+        fs.renameSync(packageResolved, currentPackage);
     }
 
     fs.mkdirSync(tempDir, { recursive: true });

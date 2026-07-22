@@ -20637,9 +20637,10 @@ async function run() {
   import_fs3.default.rmSync(tempDir, { recursive: true, force: true });
   saveState("temp_dir", tempDir);
   saveState("current_package", currentPackage);
+  saveState("package_resolved_path", packageResolved);
   const hadExistingResolved = import_fs3.default.existsSync(packageResolved);
   if (hadExistingResolved) {
-    import_fs3.default.copyFileSync(packageResolved, currentPackage);
+    import_fs3.default.renameSync(packageResolved, currentPackage);
   }
   import_fs3.default.mkdirSync(tempDir, { recursive: true });
   const xcodebuildArgs = [

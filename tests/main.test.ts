@@ -10,7 +10,7 @@ let mockSetFailed: ReturnType<typeof vi.fn>;
 let mockExec: ReturnType<typeof vi.fn>;
 let mockGetExecOutput: ReturnType<typeof vi.fn>;
 let mockRmSync: ReturnType<typeof vi.fn>;
-let mockCopyFileSync: ReturnType<typeof vi.fn>;
+let mockRenameSync: ReturnType<typeof vi.fn>;
 let mockMkdirSync: ReturnType<typeof vi.fn>;
 let mockExistsSync: ReturnType<typeof vi.fn>;
 let mockReadFileSync: ReturnType<typeof vi.fn>;
@@ -34,7 +34,7 @@ beforeEach(() => {
     mockExec = vi.fn().mockResolvedValue(0);
     mockGetExecOutput = vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
     mockRmSync = vi.fn();
-    mockCopyFileSync = vi.fn();
+    mockRenameSync = vi.fn();
     mockMkdirSync = vi.fn();
     mockExistsSync = vi.fn().mockReturnValue(true);
     mockReadFileSync = vi.fn().mockReturnValue('');
@@ -66,7 +66,7 @@ beforeEach(() => {
     vi.doMock('fs', () => ({
         default: {
             rmSync: mockRmSync,
-            copyFileSync: mockCopyFileSync,
+            renameSync: mockRenameSync,
             mkdirSync: mockMkdirSync,
             existsSync: mockExistsSync,
             readFileSync: mockReadFileSync,
@@ -128,23 +128,33 @@ describe('main', () => {
         );
     });
 
-    test('copies Package.resolved to currentPackage', async () => {
+    test('moves Package.resolved to currentPackage', async () => {
         const run = await loadRun();
         await run();
 
-        expect(mockCopyFileSync).toHaveBeenCalledWith(
+        expect(mockRenameSync).toHaveBeenCalledWith(
             'MyApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved',
             expect.stringContaining('CurrentPackage.resolved')
         );
     });
 
-    test('does not copy Package.resolved when it does not exist yet (first-ever resolve)', async () => {
+    test('saves state for package_resolved_path', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockSaveState).toHaveBeenCalledWith(
+            'package_resolved_path',
+            'MyApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved'
+        );
+    });
+
+    test('does not move Package.resolved when it does not exist yet (first-ever resolve)', async () => {
         mockExistsSync.mockReturnValue(false);
 
         const run = await loadRun();
         await run();
 
-        expect(mockCopyFileSync).not.toHaveBeenCalled();
+        expect(mockRenameSync).not.toHaveBeenCalled();
     });
 
     test('creates tempDir before xcodebuild', async () => {
@@ -423,7 +433,7 @@ describe('workspace support', () => {
         const run = await loadRun();
         await run();
 
-        expect(mockCopyFileSync).toHaveBeenCalledWith(
+        expect(mockRenameSync).toHaveBeenCalledWith(
             'MyApp.xcworkspace/xcshareddata/swiftpm/Package.resolved',
             expect.stringContaining('CurrentPackage.resolved')
         );
