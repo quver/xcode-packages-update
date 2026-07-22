@@ -136,7 +136,7 @@ jobs:
 
 ## HTML dependency report
 
-When `html_report_path` is set, the action writes a self-contained HTML file with a full dependency table. Each row shows:
+When `html_report_path` is set, the action writes an HTML file with a full dependency table. Each row shows:
 
 - **Package** — repository name, linked to the source URL
 - **Version** — installed version; for updated packages shown as `old → new`
@@ -144,6 +144,8 @@ When `html_report_path` is set, the action writes a self-contained HTML file wit
 - **Change** — `✨ added`, `🗑 removed`, `⬆ updated`, or blank
 
 Rows are colour-coded: green for added, yellow for updated, red with strikethrough for removed.
+
+> **Note:** When the report includes a dependency graph, it loads [Mermaid](https://mermaid.js.org) from a CDN (`cdn.jsdelivr.net`) to render it — the report is not usable fully offline/air-gapped in that case. Only `http(s)` repository URLs are rendered as clickable links; any other scheme is shown as plain text.
 
 ## CycloneDX SBOM
 
@@ -167,12 +169,12 @@ The action scans two sources:
 
 **`Package.swift` files** (all modules in the project):
 
-| Condition                                                                     | Classification |
-| ----------------------------------------------------------------------------- | -------------- |
-| Package referenced in `.testTarget(...)` dependencies                         | Development    |
-| Package referenced in `plugins: [.plugin(name:, package:)]` inside any target | Development    |
-| Package referenced in `.target(...)` dependencies                             | App            |
-| Package appears in both `.target` and `.testTarget`                           | App wins       |
+| Condition                                                                        | Classification |
+| -------------------------------------------------------------------------------- | -------------- |
+| Package referenced in `.testTarget(...)` dependencies                            | Development    |
+| Package referenced in `plugins: [.plugin(name:, package:)]` inside any target    | Development    |
+| Package referenced in `.target(...)`, `.executableTarget(...)`, or `.macro(...)` | App            |
+| Package appears in both an app target and a `.testTarget`                        | App wins       |
 
 **`project.pbxproj`** (Xcode-managed dependencies):
 
@@ -205,9 +207,9 @@ Identities are matched case-insensitively against the `identity` field in `Packa
 ## Example summary output
 
 ```
-- removed: old-package 2.0.0
-- added:   swift-snapshot-testing 1.18.9
-- updated: firebase 11.12.0 → 11.13.0
+- removed: old-package: 2.0.0
+- added:   swift-snapshot-testing: 1.18.9
+- updated: firebase: 11.12.0 → 11.13.0
 ```
 
 ## Reporting issues and feature requests

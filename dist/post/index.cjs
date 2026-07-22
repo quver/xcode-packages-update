@@ -19193,11 +19193,16 @@ var import_fs2 = __toESM(require("fs"), 1);
 async function run() {
   const tempDir = getState("temp_dir");
   const currentPackage = getState("current_package");
+  const packageResolvedPath = getState("package_resolved_path");
   if (tempDir) {
     import_fs2.default.rmSync(tempDir, { recursive: true, force: true });
   }
-  if (currentPackage) {
-    import_fs2.default.rmSync(currentPackage, { force: true });
+  if (currentPackage && import_fs2.default.existsSync(currentPackage)) {
+    if (packageResolvedPath && !import_fs2.default.existsSync(packageResolvedPath)) {
+      import_fs2.default.renameSync(currentPackage, packageResolvedPath);
+    } else {
+      import_fs2.default.rmSync(currentPackage, { force: true });
+    }
   }
 }
 

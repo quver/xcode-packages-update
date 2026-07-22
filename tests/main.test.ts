@@ -138,6 +138,25 @@ describe('main', () => {
         );
     });
 
+    test('saves state for package_resolved_path', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockSaveState).toHaveBeenCalledWith(
+            'package_resolved_path',
+            'MyApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved'
+        );
+    });
+
+    test('does not move Package.resolved when it does not exist yet (first-ever resolve)', async () => {
+        mockExistsSync.mockReturnValue(false);
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockRenameSync).not.toHaveBeenCalled();
+    });
+
     test('creates tempDir before xcodebuild', async () => {
         const run = await loadRun();
         await run();
@@ -232,6 +251,18 @@ describe('main', () => {
 
         const run = await loadRun();
         await expect(run()).rejects.toThrow('xcodebuild failed');
+    });
+
+    test('temporary_packages_dir_path resolving outside the workspace → throws before deleting anything', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '..';
+            return '';
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow('must resolve to a subdirectory inside the workspace');
+        expect(mockRmSync).not.toHaveBeenCalled();
     });
 });
 
@@ -331,6 +362,30 @@ describe('input validation', () => {
             return true; // allow other fs.existsSync calls (e.g. nothing else expected)
         });
         mockReadFileSync.mockReturnValue('<FileRef location = "container:MyApp.xcodeproj"></FileRef>');
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'workspace_file') return 'MyApp.xcworkspace';
+            if (name === 'scheme') return 'MyScheme';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockExec).toHaveBeenCalledWith(
+            'xcodebuild',
+            expect.arrayContaining(['-workspace', 'MyApp.xcworkspace'])
+        );
+    });
+
+    test('workspace_file with scheme in a group:-referenced project (e.g. CocoaPods) → finds scheme and proceeds', async () => {
+        mockExistsSync.mockImplementation((p: string) => {
+            if (p.endsWith('MyApp.xcworkspace/xcshareddata/xcschemes/MyScheme.xcscheme')) return false;
+            if (p.endsWith('contents.xcworkspacedata')) return true;
+            if (p.endsWith('MyApp.xcodeproj/xcshareddata/xcschemes/MyScheme.xcscheme')) return true;
+            return true;
+        });
+        mockReadFileSync.mockReturnValue('<FileRef location = "group:MyApp.xcodeproj"></FileRef>');
         mockGetInput.mockImplementation((name: string) => {
             if (name === 'workspace_file') return 'MyApp.xcworkspace';
             if (name === 'scheme') return 'MyScheme';
@@ -456,7 +511,8 @@ describe('html report generation', () => {
         expect(mockBuildDependencyGraph).toHaveBeenCalledWith(
             expect.any(Map),
             expect.any(String),
-            expect.stringContaining('checkouts')
+            expect.stringContaining('checkouts'),
+            '.spm-tmp'
         );
         expect(mockGenerateHtmlReport.mock.calls[0][5]).toBe('flowchart TD\n  n0["firebase"]');
     });
@@ -470,7 +526,7 @@ describe('html report generation', () => {
 
     test('runGit closure fetches tags through exec.getExecOutput', async () => {
         mockGetLatestVersions.mockImplementation(async (_afterInfo, runGit) => {
-            await runGit('git', ['ls-remote', '--tags', '--refs', 'https://example.com/repo']);
+            await runGit('git', ['ls-remote', '--tags', '--refs', '--', 'https://example.com/repo']);
             return new Map();
         });
         mockGetInput.mockImplementation((name: string) => {
@@ -485,8 +541,8 @@ describe('html report generation', () => {
 
         expect(mockGetExecOutput).toHaveBeenCalledWith(
             'git',
-            ['ls-remote', '--tags', '--refs', 'https://example.com/repo'],
-            { silent: true, ignoreReturnCode: true }
+            ['ls-remote', '--tags', '--refs', '--', 'https://example.com/repo'],
+            { silent: true, env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }) }
         );
     });
 
@@ -506,6 +562,23 @@ describe('html report generation', () => {
         expect(devArg).toBeInstanceOf(Set);
         expect(devArg.has('swiftlintplugins')).toBe(true);
         expect(devArg.has('swift-snapshot-testing')).toBe(true);
+    });
+
+    test('matches development_packages case-insensitively against Package.resolved identities', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'deps.html';
+            if (name === 'development_packages') return 'PactSwift, SwiftLintPlugins';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        const devArg = mockGenerateHtmlReport.mock.calls[0][3] as Set<string>;
+        expect(devArg.has('pactswift')).toBe(true);
+        expect(devArg.has('swiftlintplugins')).toBe(true);
     });
 });
 
@@ -615,7 +688,11 @@ describe('dev package auto-detection with workspace', () => {
         const run = await loadRun();
         await run();
 
-        expect(mockDetectDevPackages).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('path/to'));
+        expect(mockDetectDevPackages).toHaveBeenCalledWith(
+            expect.any(String),
+            expect.stringContaining('path/to'),
+            '.spm-tmp'
+        );
     });
 
     test('does not call detectDevPackages when development_packages is provided', async () => {
