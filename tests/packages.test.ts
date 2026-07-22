@@ -180,6 +180,31 @@ describe('getPackages', () => {
         expect(() => getPackages('Package.resolved')).not.toThrow();
         expect(getPackages('Package.resolved').size).toBe(0);
     });
+
+    test('treats a non-array pins field in the legacy v1 format as no packages instead of throwing', async () => {
+        mockReadFileSync.mockReturnValue(JSON.stringify({ object: { pins: { not: 'an array' } }, version: 1 }));
+
+        const getPackages = await loadGetPackages();
+
+        expect(() => getPackages('Package.resolved')).not.toThrow();
+        expect(getPackages('Package.resolved').size).toBe(0);
+    });
+
+    test('parses a legacy v1 pin with no state at all', async () => {
+        mockReadFileSync.mockReturnValue(
+            JSON.stringify({
+                object: {
+                    pins: [{ package: 'Alamofire', repositoryURL: 'https://github.com/Alamofire/Alamofire.git' }]
+                },
+                version: 1
+            })
+        );
+
+        const getPackages = await loadGetPackages();
+        const result = getPackages('Package.resolved');
+
+        expect(result.get('alamofire')).toBe('');
+    });
 });
 
 describe('getPackagesWithInfo', () => {
@@ -627,6 +652,35 @@ describe('getLatestVersions', () => {
         expect(result.has('firebase')).toBe(false);
     });
 
+    test('omits a package when the git command throws synchronously instead of rejecting', async () => {
+        const getLatestVersions = await loadGetLatestVersions();
+        const afterInfo = new Map([['firebase', makeInfo('11.0.0')]]);
+        const runGit = vi.fn(() => {
+            throw new Error('spawn failure');
+        });
+
+        const result = await getLatestVersions(afterInfo, runGit);
+
+        expect(result.has('firebase')).toBe(false);
+    });
+
+    test('falls back to no version when a package lookup exceeds the per-package timeout', async () => {
+        vi.useFakeTimers();
+        try {
+            const getLatestVersions = await loadGetLatestVersions();
+            const afterInfo = new Map([['firebase', makeInfo('11.0.0')]]);
+            const runGit = vi.fn(() => new Promise<string>(() => {}));
+
+            const resultPromise = getLatestVersions(afterInfo, runGit);
+            await vi.advanceTimersByTimeAsync(15_000);
+            const result = await resultPromise;
+
+            expect(result.has('firebase')).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     test('omits packages with no stable tags', async () => {
         const getLatestVersions = await loadGetLatestVersions();
         const afterInfo = new Map([['firebase', makeInfo('11.0.0')]]);
@@ -889,11 +943,11 @@ describe('getDirectDependencies', () => {
     test('excludes the given excludeDir from both the Package.swift and pbxproj scan', async () => {
         const { getDirectDependencies } = await import('../src/packages.js');
         mockReaddirSync.mockImplementation((dir: string) => {
-            if (String(dir) === '.') return [makeEntry('.spm-tmp', true)];
+            if (String(dir) === '.') return [makeEntry('custom-tmp-dir', true)];
             throw new Error(`should not scan excluded dir: ${dir}`);
         });
 
-        const result = getDirectDependencies(new Set(['firebase-ios-sdk']), '.', '.spm-tmp');
+        const result = getDirectDependencies(new Set(['firebase-ios-sdk']), '.', 'custom-tmp-dir');
 
         expect(result.size).toBe(0);
     });
@@ -1037,6 +1091,37 @@ describe('generateSbom', () => {
 
         expect(sbom.components[0].purl).toBe('pkg:swift/github.com/org/mypkg');
     });
+
+    test('reads the tool version from package.json when it is not injected at build time', async () => {
+        mockReadFileSync.mockReturnValue(JSON.stringify({ name: 'xcode-packages-update', version: '9.9.9' }));
+
+        const generateSbom = await loadGenerateSbom();
+        const sbom = JSON.parse(generateSbom(new Map()));
+
+        expect(sbom.metadata.tools[0].version).toBe('9.9.9');
+    });
+
+    test('falls back to 0.0.0 when package.json has no version field', async () => {
+        mockReadFileSync.mockReturnValue(JSON.stringify({ name: 'xcode-packages-update' }));
+
+        const generateSbom = await loadGenerateSbom();
+        const sbom = JSON.parse(generateSbom(new Map()));
+
+        expect(sbom.metadata.tools[0].version).toBe('0.0.0');
+    });
+
+    test('uses the build-time injected version when __PACKAGE_VERSION__ is defined', async () => {
+        (globalThis as unknown as { __PACKAGE_VERSION__?: string }).__PACKAGE_VERSION__ = '3.2.1';
+        try {
+            const generateSbom = await loadGenerateSbom();
+            const sbom = JSON.parse(generateSbom(new Map()));
+
+            expect(sbom.metadata.tools[0].version).toBe('3.2.1');
+            expect(mockReadFileSync).not.toHaveBeenCalled();
+        } finally {
+            delete (globalThis as unknown as { __PACKAGE_VERSION__?: string }).__PACKAGE_VERSION__;
+        }
+    });
 });
 
 describe('detectDevPackages', () => {
@@ -1165,15 +1250,75 @@ describe('detectDevPackages', () => {
         expect(result.has('firebase-ios-sdk')).toBe(false);
     });
 
+    test('a line comment containing an unbalanced parenthesis does not truncate the block early', async () => {
+        const packageSwift = `
+            .testTarget(name: "MyTests", dependencies: [
+                // an unbalanced paren should not close the call here: )
+                .product(name: "PactSwift", package: "pactswift")
+            ])
+        `;
+
+        mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved')) return makeResolved('pactswift');
+            return packageSwift;
+        });
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.has('pactswift')).toBe(true);
+    });
+
+    test('a block comment containing an unbalanced parenthesis does not truncate the block early', async () => {
+        const packageSwift = `
+            .testTarget(name: "MyTests", dependencies: [
+                /* an unbalanced paren should not close the call here: ) */
+                .product(name: "PactSwift", package: "pactswift")
+            ])
+        `;
+
+        mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved')) return makeResolved('pactswift');
+            return packageSwift;
+        });
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.has('pactswift')).toBe(true);
+    });
+
+    test('an escaped quote inside a string literal does not end the string early', async () => {
+        const packageSwift = `
+            .testTarget(name: "MyTests", dependencies: [], cSettings: [.define("USE_\\"FOO\\"(")])
+            .target(name: "MyApp", dependencies: [
+                .product(name: "Firebase", package: "firebase-ios-sdk")
+            ])
+        `;
+
+        mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved')) return makeResolved('firebase-ios-sdk');
+            return packageSwift;
+        });
+
+        const detectDevPackages = await loadDetectDevPackages();
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.has('firebase-ios-sdk')).toBe(false);
+    });
+
     test('excludes the given excludeDir from the Package.swift scan', async () => {
         mockReaddirSync.mockImplementation((dir: string) => {
-            if (dir === '.') return [makeEntry('.spm-tmp', true)];
+            if (dir === '.') return [makeEntry('custom-tmp-dir', true)];
             throw new Error(`should not scan excluded dir: ${dir}`);
         });
         mockReadFileSync.mockReturnValue(makeResolved());
 
         const detectDevPackages = await loadDetectDevPackages();
-        const result = detectDevPackages('Package.resolved', '.', '.spm-tmp');
+        const result = detectDevPackages('Package.resolved', '.', 'custom-tmp-dir');
 
         expect(result.size).toBe(0);
     });
@@ -1489,6 +1634,21 @@ describe('detectXcodeDevPackages', () => {
         expect(appRefs.has('swift-snapshot-testing')).toBe(false);
     });
 
+    test('a nested dictionary inside a target block does not truncate the block before packageProductDependencies', async () => {
+        const pbxproj = [
+            `${FIREBASE_REF_ID} /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = { repositoryURL = "https://github.com/firebase/firebase-ios-sdk"; };`,
+            `${FIREBASE_DEP_ID} /* Firebase */ = {\n  isa = XCSwiftPackageProductDependency;\n  package = ${FIREBASE_REF_ID} /* ref */;\n  productName = Firebase;\n};`,
+            `TARGETID0000000000000000 /* Futurum */ = {\n  isa = PBXNativeTarget;\n  name = Futurum;\n  buildSettings = {\n    SWIFT_VERSION = 5.0;\n  };\n  packageProductDependencies = (\n    ${FIREBASE_DEP_ID} /* dep */,\n  );\n};`
+        ].join('\n\n');
+        mockReadFileSync.mockReturnValue(pbxproj);
+
+        const detectXcodeDevPackages = await loadDetectXcodeDevPackages();
+        const { devRefs, appRefs } = detectXcodeDevPackages('project.pbxproj');
+
+        expect(appRefs.has('firebase-ios-sdk')).toBe(true);
+        expect(devRefs.has('firebase-ios-sdk')).toBe(false);
+    });
+
     test('ignores product dep without a remote package reference (local dep)', async () => {
         const LOCAL_DEP_ID = 'FFFFFFFFFFFFFFFFFFFFFFFE';
         const pbxproj = makePbxproj({
@@ -1563,6 +1723,48 @@ describe('findPbxprojFiles existsSync true path', () => {
         expect(mockExistsSync).toHaveBeenCalled();
         expect(mockExistsSync).toHaveBeenCalledWith('Futurum.xcodeproj/project.pbxproj');
         expect(result.has('swift-snapshot-testing')).toBe(true);
+    });
+
+    test('merges an app classification from the pbxproj scan with a dev classification from Package.swift', async () => {
+        // firebase-ios-sdk looks dev-only from the Package.swift testTarget alone, but the pbxproj
+        // scan finds it linked to a regular (non-test) target — the combined result must treat it as app.
+        const REF_ID = 'AAAAAAAAAAAAAAAAAAAAAAAA';
+        const DEP_ID = 'BBBBBBBBBBBBBBBBBBBBBBBB';
+        const packageSwift = `
+            .testTarget(name: "MyTests", dependencies: [
+                .product(name: "Firebase", package: "firebase-ios-sdk")
+            ])
+        `;
+        const pbxproj = [
+            `${REF_ID} /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = { repositoryURL = "https://github.com/firebase/firebase-ios-sdk"; };`,
+            `${DEP_ID} /* Firebase */ = {\n  isa = XCSwiftPackageProductDependency;\n  package = ${REF_ID} /* ref */;\n  productName = Firebase;\n};`,
+            `TARGETID0000000000000000 /* Futurum */ = {\n  isa = PBXNativeTarget;\n  name = Futurum;\n  packageProductDependencies = (\n    ${DEP_ID} /* dep */,\n  );\n};`
+        ].join('\n\n');
+
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir) === '.') return [makeEntry('Package.swift', false), makeEntry('Futurum.xcodeproj', true)];
+            return [];
+        });
+        mockExistsSync.mockReturnValue(true);
+        mockReadFileSync.mockImplementation((p: string) => {
+            if (String(p).endsWith('Package.resolved'))
+                return JSON.stringify({
+                    pins: [
+                        {
+                            identity: 'firebase-ios-sdk',
+                            location: 'https://github.com/firebase/firebase-ios-sdk',
+                            state: { version: '1.0.0' }
+                        }
+                    ]
+                });
+            if (String(p).endsWith('Package.swift')) return packageSwift;
+            return pbxproj;
+        });
+
+        const { detectDevPackages } = await import('../src/packages.js');
+        const result = detectDevPackages('Package.resolved', '.');
+
+        expect(result.has('firebase-ios-sdk')).toBe(false);
     });
 
     test('excludes xcodeproj whose pbxproj does not exist when existsSync returns false', async () => {
