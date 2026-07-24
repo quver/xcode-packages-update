@@ -489,6 +489,22 @@ describe('html report generation', () => {
         expect(mockGenerateHtmlReport.mock.calls[0][4]).toBe(latest);
     });
 
+    test('uses an empty beforeInfo map when there is no existing Package.resolved (first-ever resolve)', async () => {
+        mockExistsSync.mockReturnValue(false);
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'reports/deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockGetPackagesWithInfo).toHaveBeenCalledTimes(1);
+        expect(mockGenerateHtmlReport.mock.calls[0][0]).toEqual(new Map());
+    });
+
     test('does not fetch latest versions when html_report_path not set', async () => {
         const run = await loadRun();
         await run();
