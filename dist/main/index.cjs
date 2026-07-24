@@ -20520,7 +20520,7 @@ function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function getToolVersion() {
-  return true ? "3.1.5" : readOwnPackageVersion();
+  return true ? "4.0.0" : readOwnPackageVersion();
 }
 function normalizeGitUrl(url) {
   const scpMatch = /^([\w.-]+)@([\w.-]+):(.+)$/.exec(url);
