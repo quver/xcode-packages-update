@@ -20602,7 +20602,7 @@ function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function getToolVersion() {
-  return true ? "4.0.2" : readOwnPackageVersion();
+  return true ? "4.0.3" : readOwnPackageVersion();
 }
 function normalizeGitUrl(url) {
   const scpMatch = /^([\w.-]+)@([\w.-]+):(.+)$/.exec(url);
