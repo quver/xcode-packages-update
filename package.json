@@ -1,6 +1,6 @@
 {
   "name": "xcode-packages-update",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "description": "Resolves Xcode SPM dependencies and reports what changed",
   "type": "module",
   "engines": {
