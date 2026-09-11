@@ -20722,7 +20722,7 @@ function generateSbom(afterInfo, devPackages = /* @__PURE__ */ new Set()) {
     version: 1,
     metadata: {
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      tools: [{ name: "xcode-packages-update", version: "4.0.4" }]
+      tools: [{ name: "xcode-packages-update", version: "4.0.5" }]
     },
     components
   };
