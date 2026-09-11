@@ -1,7 +1,8 @@
+import type { Dirent } from 'fs';
 import { vi, beforeEach, describe, test, expect } from 'vitest';
+import { version as packageVersion } from '../package.json';
 import { comparePackages } from '../src/packages.js';
 import type {
-    getPackages as GetPackagesFn,
     getPackagesWithInfo as GetPackagesWithInfoFn,
     generateHtmlReport as GenerateHtmlReportFn,
     generateSbom as GenerateSbomFn,
@@ -27,9 +28,27 @@ beforeEach(() => {
     }));
 });
 
-async function loadGetPackages(): Promise<typeof GetPackagesFn> {
-    const { getPackages } = await import('../src/packages.js');
-    return getPackages;
+/** Version parsing as main.ts consumes it: getPackagesWithInfo projected through toVersionMap. */
+async function loadGetPackages(): Promise<(filePath: string) => Map<string, string>> {
+    const { getPackagesWithInfo, toVersionMap } = await import('../src/packages.js');
+    return (filePath) => toVersionMap(getPackagesWithInfo(filePath));
+}
+
+/** Dev-package detection as main.ts wires it: resolved identities plus a single project scan. */
+async function loadDetectDevPackages(): Promise<
+    (resolvedPath: string, projectRoot: string, excludeDir?: string) => Set<string>
+> {
+    const { detectDevPackages, getPackagesWithInfo, scanProject } = await import('../src/packages.js');
+    return (resolvedPath, projectRoot, excludeDir) =>
+        detectDevPackages(new Set(getPackagesWithInfo(resolvedPath).keys()), scanProject(projectRoot, excludeDir));
+}
+
+async function loadGetDirectDependencies(): Promise<
+    (resolvedSet: Set<string>, projectRoot: string, excludeDir?: string) => Set<string>
+> {
+    const { getDirectDependencies, scanProject } = await import('../src/packages.js');
+    return (resolvedSet, projectRoot, excludeDir) =>
+        getDirectDependencies(resolvedSet, scanProject(projectRoot, excludeDir));
 }
 
 async function loadGetPackagesWithInfo(): Promise<typeof GetPackagesWithInfoFn> {
@@ -57,12 +76,12 @@ async function loadGetLatestVersions(): Promise<typeof import('../src/packages.j
     return getLatestVersions;
 }
 
-const makeEntry = (name: string, isDir: boolean): fs.Dirent =>
-    ({ name, isFile: () => !isDir, isDirectory: () => isDir }) as unknown as fs.Dirent;
+const makeEntry = (name: string, isDir: boolean): Dirent =>
+    ({ name, isFile: () => !isDir, isDirectory: () => isDir }) as unknown as Dirent;
 
 const makeInfo = (version: string, url = 'https://github.com/org/repo') => ({ version, url });
 
-describe('getPackages', () => {
+describe('toVersionMap(getPackagesWithInfo())', () => {
     test('parses version from pins', async () => {
         mockReadFileSync.mockReturnValue(
             JSON.stringify({
@@ -857,7 +876,7 @@ describe('getDependencyEdges', () => {
 
 describe('getDirectDependencies', () => {
     test('collects direct deps declared in the project Package.swift', async () => {
-        const { getDirectDependencies } = await import('../src/packages.js');
+        const getDirectDependencies = await loadGetDirectDependencies();
         mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
         mockReadFileSync.mockReturnValue(
             '.package(url: "https://github.com/firebase/firebase-ios-sdk", from: "11.0.0")'
@@ -870,7 +889,7 @@ describe('getDirectDependencies', () => {
     });
 
     test('skips a project Package.swift that cannot be read', async () => {
-        const { getDirectDependencies } = await import('../src/packages.js');
+        const getDirectDependencies = await loadGetDirectDependencies();
         mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
         mockReadFileSync.mockImplementation(() => {
             throw new Error('EACCES');
@@ -882,7 +901,7 @@ describe('getDirectDependencies', () => {
     });
 
     test('collects direct deps from project.pbxproj remote references', async () => {
-        const { getDirectDependencies } = await import('../src/packages.js');
+        const getDirectDependencies = await loadGetDirectDependencies();
         mockReaddirSync.mockImplementation((dir: string) => {
             if (String(dir) === '.') return [makeEntry('MyApp.xcodeproj', true)];
             return [];
@@ -898,7 +917,7 @@ describe('getDirectDependencies', () => {
     });
 
     test('ignores a declared dependency that is not in the resolved set', async () => {
-        const { getDirectDependencies } = await import('../src/packages.js');
+        const getDirectDependencies = await loadGetDirectDependencies();
         mockReaddirSync.mockReturnValue([makeEntry('Package.swift', false)]);
         mockReadFileSync.mockReturnValue('.package(url: "https://github.com/x/not-resolved", from: "1.0.0")');
 
@@ -908,7 +927,7 @@ describe('getDirectDependencies', () => {
     });
 
     test('ignores a pbxproj remote reference that is not in the resolved set', async () => {
-        const { getDirectDependencies } = await import('../src/packages.js');
+        const getDirectDependencies = await loadGetDirectDependencies();
         mockReaddirSync.mockImplementation((dir: string) => {
             if (String(dir) === '.') return [makeEntry('MyApp.xcodeproj', true)];
             return [];
@@ -924,7 +943,7 @@ describe('getDirectDependencies', () => {
     });
 
     test('finds a project.pbxproj referenced one directory level below the workspace (e.g. container:SubDir/App.xcodeproj)', async () => {
-        const { getDirectDependencies } = await import('../src/packages.js');
+        const getDirectDependencies = await loadGetDirectDependencies();
         mockReaddirSync.mockImplementation((dir: string) => {
             if (String(dir) === '.') return [makeEntry('SubDir', true)];
             if (String(dir) === 'SubDir') return [makeEntry('MyApp.xcodeproj', true)];
@@ -941,7 +960,7 @@ describe('getDirectDependencies', () => {
     });
 
     test('excludes the given excludeDir from both the Package.swift and pbxproj scan', async () => {
-        const { getDirectDependencies } = await import('../src/packages.js');
+        const getDirectDependencies = await loadGetDirectDependencies();
         mockReaddirSync.mockImplementation((dir: string) => {
             if (String(dir) === '.') return [makeEntry('custom-tmp-dir', true)];
             throw new Error(`should not scan excluded dir: ${dir}`);
@@ -953,9 +972,33 @@ describe('getDirectDependencies', () => {
     });
 });
 
+describe('scanProject', () => {
+    test('collects manifests and pbxproj classifications in a single walk of the tree', async () => {
+        const { scanProject } = await import('../src/packages.js');
+        mockReaddirSync.mockImplementation((dir: string) => {
+            if (String(dir) === '.') return [makeEntry('Package.swift', false), makeEntry('MyApp.xcodeproj', true)];
+            return [];
+        });
+        mockExistsSync.mockReturnValue(true);
+        mockReadFileSync.mockImplementation((p: string) =>
+            String(p).endsWith('Package.swift')
+                ? '.package(url: "https://github.com/apple/swift-protobuf", from: "1.0.0")'
+                : 'AAAAAAAAAAAAAAAAAAAAAAAA /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = { repositoryURL = "https://github.com/firebase/firebase-ios-sdk" }'
+        );
+
+        const scan = scanProject('.');
+
+        expect(scan.manifests).toEqual(['.package(url: "https://github.com/apple/swift-protobuf", from: "1.0.0")']);
+        // A remote reference linked to no target is classified as dev (build-tool plugin heuristic).
+        expect(scan.xcodeDevRefs).toEqual(new Set(['firebase-ios-sdk']));
+        expect(scan.xcodeAppRefs).toEqual(new Set());
+        expect(mockReaddirSync.mock.calls.filter(([dir]) => String(dir) === '.')).toHaveLength(1);
+    });
+});
+
 describe('buildDependencyGraph', () => {
     test('produces a mermaid graph from the resolved set, project sources and checkouts', async () => {
-        const { buildDependencyGraph } = await import('../src/packages.js');
+        const { buildDependencyGraph, scanProject } = await import('../src/packages.js');
         const afterInfo = new Map([
             ['firebase-ios-sdk', { version: '1.0.0', url: 'https://github.com/firebase/firebase-ios-sdk' }],
             ['swift-protobuf', { version: '1.0.0', url: 'https://github.com/apple/swift-protobuf' }]
@@ -970,7 +1013,7 @@ describe('buildDependencyGraph', () => {
             return '.package(url: "https://github.com/firebase/firebase-ios-sdk", from: "11.0.0")';
         });
 
-        const graph = buildDependencyGraph(afterInfo, '.', '/tmp/checkouts');
+        const graph = buildDependencyGraph(afterInfo, scanProject('.'), '/tmp/checkouts');
 
         expect(graph).toContain('flowchart TD');
         expect(graph).toContain('firebase-ios-sdk');
@@ -1092,44 +1135,16 @@ describe('generateSbom', () => {
         expect(sbom.components[0].purl).toBe('pkg:swift/github.com/org/mypkg');
     });
 
-    test('reads the tool version from package.json when it is not injected at build time', async () => {
-        mockReadFileSync.mockReturnValue(JSON.stringify({ name: 'xcode-packages-update', version: '9.9.9' }));
-
+    test('reports the build-time injected __PACKAGE_VERSION__ as the tool version without touching the filesystem', async () => {
         const generateSbom = await loadGenerateSbom();
         const sbom = JSON.parse(generateSbom(new Map()));
 
-        expect(sbom.metadata.tools[0].version).toBe('9.9.9');
-    });
-
-    test('falls back to 0.0.0 when package.json has no version field', async () => {
-        mockReadFileSync.mockReturnValue(JSON.stringify({ name: 'xcode-packages-update' }));
-
-        const generateSbom = await loadGenerateSbom();
-        const sbom = JSON.parse(generateSbom(new Map()));
-
-        expect(sbom.metadata.tools[0].version).toBe('0.0.0');
-    });
-
-    test('uses the build-time injected version when __PACKAGE_VERSION__ is defined', async () => {
-        (globalThis as unknown as { __PACKAGE_VERSION__?: string }).__PACKAGE_VERSION__ = '3.2.1';
-        try {
-            const generateSbom = await loadGenerateSbom();
-            const sbom = JSON.parse(generateSbom(new Map()));
-
-            expect(sbom.metadata.tools[0].version).toBe('3.2.1');
-            expect(mockReadFileSync).not.toHaveBeenCalled();
-        } finally {
-            delete (globalThis as unknown as { __PACKAGE_VERSION__?: string }).__PACKAGE_VERSION__;
-        }
+        expect(sbom.metadata.tools[0].version).toBe(packageVersion);
+        expect(mockReadFileSync).not.toHaveBeenCalled();
     });
 });
 
 describe('detectDevPackages', () => {
-    async function loadDetectDevPackages(): Promise<typeof import('../src/packages.js').detectDevPackages> {
-        const { detectDevPackages } = await import('../src/packages.js');
-        return detectDevPackages;
-    }
-
     beforeEach(() => {
         mockReaddirSync = vi.fn();
         mockExistsSync = vi.fn().mockReturnValue(false);
@@ -1682,7 +1697,7 @@ describe('detectXcodeDevPackages', () => {
     });
 });
 
-describe('findPbxprojFiles existsSync true path', () => {
+describe('scanProject .xcodeproj discovery', () => {
     test('includes pbxproj path in detectDevPackages when existsSync returns true', async () => {
         const pbxproj = [
             `AAAAAAAAAAAAAAAAAAAAAAAA /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */ = { repositoryURL = "https://github.com/pointfreeco/swift-snapshot-testing" }`,
@@ -1717,7 +1732,7 @@ describe('findPbxprojFiles existsSync true path', () => {
             return pbxproj;
         });
 
-        const { detectDevPackages } = await import('../src/packages.js');
+        const detectDevPackages = await loadDetectDevPackages();
         const result = detectDevPackages('Package.resolved', '.');
 
         expect(mockExistsSync).toHaveBeenCalled();
@@ -1761,7 +1776,7 @@ describe('findPbxprojFiles existsSync true path', () => {
             return pbxproj;
         });
 
-        const { detectDevPackages } = await import('../src/packages.js');
+        const detectDevPackages = await loadDetectDevPackages();
         const result = detectDevPackages('Package.resolved', '.');
 
         expect(result.has('firebase-ios-sdk')).toBe(false);
@@ -1787,7 +1802,7 @@ describe('findPbxprojFiles existsSync true path', () => {
             return '';
         });
 
-        const { detectDevPackages } = await import('../src/packages.js');
+        const detectDevPackages = await loadDetectDevPackages();
         const result = detectDevPackages('Package.resolved', '.');
 
         expect(mockExistsSync).toHaveBeenCalledWith('Futurum.xcodeproj/project.pbxproj');

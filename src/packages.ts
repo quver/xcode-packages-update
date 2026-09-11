@@ -40,7 +40,7 @@ function parseResolved(filePath: string): ResolvedPin[] {
         return pins.map((pin) => ({
             identity: identityFromUrl(pin.repositoryURL),
             location: pin.repositoryURL,
-            state: pin.state ?? undefined
+            state: pin.state
         }));
     }
 
@@ -60,11 +60,6 @@ function resolveVersion(state: ResolvedPin['state']): string {
     return state?.revision ?? '';
 }
 
-export function getPackages(filePath: string): Map<string, string> {
-    const pins = parseResolved(filePath);
-    return new Map(pins.map((pin) => [pin.identity, resolveVersion(pin.state)]));
-}
-
 export function getPackagesWithInfo(filePath: string): Map<string, PackageInfo> {
     const pins = parseResolved(filePath);
     return new Map(
@@ -76,6 +71,11 @@ export function getPackagesWithInfo(filePath: string): Map<string, PackageInfo> 
             }
         ])
     );
+}
+
+/** Projects parsed package info down to identity → version, the shape comparePackages diffs. */
+export function toVersionMap(info: Map<string, PackageInfo>): Map<string, string> {
+    return new Map([...info].map(([identity, { version }]) => [identity, version]));
 }
 
 export interface CompareResult {
@@ -200,7 +200,7 @@ export function comparePackages(before: Map<string, string>, after: Map<string, 
 
 const EXCLUDE_DIRS = new Set(['.build', 'node_modules', '.git', 'DerivedData', '.spm-tmp', '.swiftpm']);
 
-/** Directory tree walk shared by findPackageSwiftFiles/findPbxprojFiles, skipping EXCLUDE_DIRS and `excludeDir`. */
+/** Directory tree walk used by scanProject, skipping EXCLUDE_DIRS and `excludeDir`. */
 function walkDirs(
     rootDir: string,
     excludeDir: string | undefined,
@@ -227,21 +227,13 @@ function walkDirs(
     scan(rootDir);
 }
 
-/**
- * Recursively finds Package.swift manifests under `rootDir`. `excludeDir`, when given, is
- * skipped entirely — used to keep the action's own temporary_packages_dir_path (whatever it
- * is configured to) out of the scan, since it may sit under the project root.
- */
-function findPackageSwiftFiles(rootDir: string, excludeDir?: string): string[] {
-    const results: string[] = [];
-    walkDirs(rootDir, excludeDir, (dir, entries) => {
-        for (const entry of entries) {
-            if (entry.isFile() && entry.name === 'Package.swift') {
-                results.push(path.join(dir, entry.name));
-            }
-        }
-    });
-    return results;
+/** Reads a UTF-8 file, returning null when it is missing or unreadable. */
+function readTextOrNull(filePath: string): string | null {
+    try {
+        return fs.readFileSync(filePath, 'utf8');
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -352,12 +344,8 @@ function extractPbxObjectBlocks(content: string): string[] {
  *     plugin (e.g. SwiftLintPlugins).
  */
 export function detectXcodeDevPackages(pbxprojPath: string): { devRefs: Set<string>; appRefs: Set<string> } {
-    let content: string;
-    try {
-        content = fs.readFileSync(pbxprojPath, 'utf8');
-    } catch {
-        return { devRefs: new Set(), appRefs: new Set() };
-    }
+    const content = readTextOrNull(pbxprojPath);
+    if (content === null) return { devRefs: new Set(), appRefs: new Set() };
 
     // XCRemoteSwiftPackageReference id → identity
     const remoteRefToIdentity = new Map<string, string>();
@@ -372,11 +360,8 @@ export function detectXcodeDevPackages(pbxprojPath: string): { devRefs: Set<stri
     for (const m of content.matchAll(
         /(\w{24}) \/\* \S+ \*\/ = \{\s*isa = XCSwiftPackageProductDependency;\s*(?:package = (\w+) [^;]+;\s*)?productName = [^;]+;/g
     )) {
-        const depId = m[1];
-        const pkgRef = m[2];
-        if (pkgRef && remoteRefToIdentity.has(pkgRef)) {
-            prodDepToIdentity.set(depId, remoteRefToIdentity.get(pkgRef)!);
-        }
+        const identity = m[2] && remoteRefToIdentity.get(m[2]);
+        if (identity) prodDepToIdentity.set(m[1], identity);
     }
 
     // PBXNativeTarget → classify product deps, one bounded object block at a time.
@@ -404,51 +389,62 @@ export function detectXcodeDevPackages(pbxprojPath: string): { devRefs: Set<stri
     // Package references present in the project but never linked to any non-test target
     // (e.g. build-tool plugins like SwiftLintPlugins) → dev
     for (const identity of remoteRefToIdentity.values()) {
-        if (!appRefs.has(identity) && !devRefs.has(identity)) {
-            devRefs.add(identity);
-        }
+        if (!appRefs.has(identity)) devRefs.add(identity);
     }
 
     return { devRefs, appRefs };
 }
 
-/** Recursively finds project.pbxproj files under `rootDir`, skipping `excludeDir` (e.g. the SPM checkouts dir). */
-function findPbxprojFiles(rootDir: string, excludeDir?: string): string[] {
-    const results: string[] = [];
-    walkDirs(rootDir, excludeDir, (dir, entries) => {
+/** Raw facts from a single walk of the project sources, shared by dev-package detection and the dependency graph. */
+export interface ProjectScan {
+    /** Contents of every readable Package.swift under the project root. */
+    manifests: string[];
+    /** Remote packages from every project.pbxproj linked only to test targets (or to no target at all). */
+    xcodeDevRefs: Set<string>;
+    /** Remote packages from every project.pbxproj linked to at least one non-test target. */
+    xcodeAppRefs: Set<string>;
+}
+
+/**
+ * Walks `projectRoot` once, reading every Package.swift manifest and classifying the remote
+ * packages of every `.xcodeproj`. `excludeDir`, when given, is skipped entirely — used to keep
+ * the action's own temporary_packages_dir_path (whose cloned checkouts are not project sources)
+ * out of the scan, since it may sit under the project root.
+ */
+export function scanProject(projectRoot: string, excludeDir?: string): ProjectScan {
+    const scan: ProjectScan = { manifests: [], xcodeDevRefs: new Set(), xcodeAppRefs: new Set() };
+
+    walkDirs(projectRoot, excludeDir, (dir, entries) => {
         for (const entry of entries) {
-            if (entry.isDirectory() && entry.name.endsWith('.xcodeproj')) {
-                const candidate = path.join(dir, entry.name, 'project.pbxproj');
-                if (fs.existsSync(candidate)) results.push(candidate);
+            if (entry.isFile() && entry.name === 'Package.swift') {
+                const content = readTextOrNull(path.join(dir, entry.name));
+                if (content !== null) scan.manifests.push(content);
+            } else if (entry.isDirectory() && entry.name.endsWith('.xcodeproj')) {
+                const pbxprojPath = path.join(dir, entry.name, 'project.pbxproj');
+                if (!fs.existsSync(pbxprojPath)) continue;
+                const { devRefs, appRefs } = detectXcodeDevPackages(pbxprojPath);
+                for (const ref of devRefs) scan.xcodeDevRefs.add(ref);
+                for (const ref of appRefs) scan.xcodeAppRefs.add(ref);
             }
         }
     });
-    return results;
+
+    return scan;
 }
 
 /** Non-test target kinds that count as app (production) targets for dev-package detection. */
 const APP_TARGET_KEYWORDS = ['target', 'executableTarget', 'macro'];
 
 /**
- * Scans Package.swift files and project.pbxproj files in `projectRoot` and returns
- * identities that are referenced exclusively in test targets or as build tool plugins —
- * never in regular app targets. `excludeDir`, when given, is skipped during the scan (e.g.
- * the action's own temporary_packages_dir_path, whose cloned checkouts are not project sources).
- * Falls back gracefully: if parsing yields no results the set is empty (no false positives).
+ * Returns resolved identities that the scanned project references exclusively in test targets
+ * or as build tool plugins — never in regular app targets. Falls back gracefully: if parsing
+ * yields no results the set is empty (no false positives).
  */
-export function detectDevPackages(resolvedFilePath: string, projectRoot: string, excludeDir?: string): Set<string> {
-    const devRefs = new Set<string>();
-    const appRefs = new Set<string>();
+export function detectDevPackages(resolvedSet: Set<string>, scan: ProjectScan): Set<string> {
+    const devRefs = new Set(scan.xcodeDevRefs);
+    const appRefs = new Set(scan.xcodeAppRefs);
 
-    // ── Package.swift scan ──────────────────────────────────────────────────
-    for (const filePath of findPackageSwiftFiles(projectRoot, excludeDir)) {
-        let content: string;
-        try {
-            content = fs.readFileSync(filePath, 'utf8');
-        } catch {
-            continue;
-        }
-
+    for (const content of scan.manifests) {
         for (const block of extractBlocks(content, 'testTarget')) {
             for (const ref of packageRefs(block, 'product')) devRefs.add(ref);
         }
@@ -463,24 +459,8 @@ export function detectDevPackages(resolvedFilePath: string, projectRoot: string,
         }
     }
 
-    // ── project.pbxproj scan ────────────────────────────────────────────────
-    for (const pbxprojPath of findPbxprojFiles(projectRoot, excludeDir)) {
-        const { devRefs: pbxDev, appRefs: pbxApp } = detectXcodeDevPackages(pbxprojPath);
-        for (const ref of pbxDev) devRefs.add(ref);
-        for (const ref of pbxApp) appRefs.add(ref);
-    }
-
     // Packages only in dev context, never in app context
-    const resolved = getPackagesWithInfo(resolvedFilePath);
-    const result = new Set<string>();
-
-    for (const ref of devRefs) {
-        if (!appRefs.has(ref) && resolved.has(ref)) {
-            result.add(ref);
-        }
-    }
-
-    return result;
+    return new Set([...devRefs].filter((ref) => !appRefs.has(ref) && resolvedSet.has(ref)));
 }
 
 // ─── Dependency graph ────────────────────────────────────────────────────────
@@ -504,32 +484,13 @@ function manifestPackageDeps(content: string): string[] {
 /**
  * Returns the project's direct SPM dependencies (the graph roots): every package the
  * project itself references, gathered from project.pbxproj remote references and from
- * Package.swift manifests located in the project root. Only identities present in
- * Package.resolved are kept. `excludeDir`, when given, is skipped during the scan.
+ * Package.swift `.package(url:)` declarations. Only identities present in Package.resolved
+ * are kept.
  */
-export function getDirectDependencies(resolvedSet: Set<string>, projectRoot: string, excludeDir?: string): Set<string> {
-    const direct = new Set<string>();
-
-    for (const filePath of findPackageSwiftFiles(projectRoot, excludeDir)) {
-        let content: string;
-        try {
-            content = fs.readFileSync(filePath, 'utf8');
-        } catch {
-            continue;
-        }
-        for (const ref of manifestPackageDeps(content)) {
-            if (resolvedSet.has(ref)) direct.add(ref);
-        }
-    }
-
-    for (const pbxprojPath of findPbxprojFiles(projectRoot, excludeDir)) {
-        const { devRefs, appRefs } = detectXcodeDevPackages(pbxprojPath);
-        for (const ref of [...devRefs, ...appRefs]) {
-            if (resolvedSet.has(ref)) direct.add(ref);
-        }
-    }
-
-    return direct;
+export function getDirectDependencies(resolvedSet: Set<string>, scan: ProjectScan): Set<string> {
+    // detectXcodeDevPackages puts every remote package reference into at least one of the two sets.
+    const referenced = [...scan.manifests.flatMap(manifestPackageDeps), ...scan.xcodeDevRefs, ...scan.xcodeAppRefs];
+    return new Set(referenced.filter((ref) => resolvedSet.has(ref)));
 }
 
 /**
@@ -555,12 +516,8 @@ export function getDependencyEdges(checkoutsDir: string, resolvedSet: Set<string
         const identity = entry.name.toLowerCase();
         if (!resolvedSet.has(identity)) continue;
 
-        let content: string;
-        try {
-            content = fs.readFileSync(path.join(checkoutsDir, entry.name, 'Package.swift'), 'utf8');
-        } catch {
-            continue;
-        }
+        const content = readTextOrNull(path.join(checkoutsDir, entry.name, 'Package.swift'));
+        if (content === null) continue;
 
         const children = [...new Set(manifestPackageDeps(content))].filter(
             (child) => child !== identity && resolvedSet.has(child)
@@ -614,18 +571,17 @@ export function generateMermaidGraph(
 }
 
 /**
- * Orchestrator: reads the project sources and the cloned checkouts and returns a
- * Mermaid graph definition for the dependency tree. `afterInfo` is the already-parsed
- * resolved package set, so the resolved file is not read again here.
+ * Orchestrator: combines the project scan and the cloned checkouts into a Mermaid graph
+ * definition for the dependency tree. `afterInfo` and `scan` are already computed by the
+ * caller, so neither the resolved file nor the project tree is read again here.
  */
 export function buildDependencyGraph(
     afterInfo: Map<string, PackageInfo>,
-    projectRoot: string,
-    checkoutsDir: string,
-    excludeDir?: string
+    scan: ProjectScan,
+    checkoutsDir: string
 ): string {
     const resolvedSet = new Set(afterInfo.keys());
-    const directDeps = getDirectDependencies(resolvedSet, projectRoot, excludeDir);
+    const directDeps = getDirectDependencies(resolvedSet, scan);
     const edges = getDependencyEdges(checkoutsDir, resolvedSet);
     return generateMermaidGraph(afterInfo, directDeps, edges);
 }
@@ -810,25 +766,9 @@ function escapeHtml(str: string): string {
 
 // ─── CycloneDX SBOM ──────────────────────────────────────────────────────────
 
-// Replaced with a literal version string by esbuild's --define at build time (see package.json).
-declare const __PACKAGE_VERSION__: string | undefined;
-
-/** Reads this package's own version from package.json — used only when __PACKAGE_VERSION__ wasn't injected (e.g. tests). */
-function readOwnPackageVersion(): string {
-    try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')) as {
-            version?: string;
-        };
-        return pkg.version ?? '0.0.0';
-    } catch {
-        return '0.0.0';
-    }
-}
-
-/** Resolved lazily (not at module load) so importing this module never touches the filesystem. */
-function getToolVersion(): string {
-    return typeof __PACKAGE_VERSION__ !== 'undefined' ? __PACKAGE_VERSION__ : readOwnPackageVersion();
-}
+// Replaced with a literal version string by esbuild's --define at build time (see package.json)
+// and by the matching `define` in vitest.config.ts under test.
+declare const __PACKAGE_VERSION__: string;
 
 /** Normalizes an scp-style git URL (git@host:org/repo.git) into a form new URL() can parse. */
 function normalizeGitUrl(url: string): string {
@@ -873,7 +813,7 @@ export function generateSbom(afterInfo: Map<string, PackageInfo>, devPackages: S
         version: 1,
         metadata: {
             timestamp: new Date().toISOString(),
-            tools: [{ name: 'xcode-packages-update', version: getToolVersion() }]
+            tools: [{ name: 'xcode-packages-update', version: __PACKAGE_VERSION__ }]
         },
         components
     };

@@ -1,11 +1,12 @@
+import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 import globals from 'globals';
 
-export default tseslint.config(
+export default defineConfig(
     {
-        ignores: ['node_modules/**', 'dist/**', 'coverage/**', 'eslint.config.js', 'vitest.config.ts']
+        ignores: ['dist/**', 'coverage/**', 'eslint.config.js', 'vitest.config.ts']
     },
-    ...tseslint.configs.recommended,
+    tseslint.configs.recommended,
     {
         languageOptions: {
             globals: {
@@ -13,10 +14,7 @@ export default tseslint.config(
             }
         },
         rules: {
-            'no-unused-vars': 'off',
-            '@typescript-eslint/no-unused-vars': 'error',
-            eqeqeq: 'error',
-            'prefer-const': 'error'
+            eqeqeq: 'error'
         }
     }
 );
