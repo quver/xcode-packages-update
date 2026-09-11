@@ -14,7 +14,7 @@ let mockRenameSync: ReturnType<typeof vi.fn>;
 let mockMkdirSync: ReturnType<typeof vi.fn>;
 let mockExistsSync: ReturnType<typeof vi.fn>;
 let mockReadFileSync: ReturnType<typeof vi.fn>;
-let mockGetPackages: ReturnType<typeof vi.fn>;
+let mockToVersionMap: ReturnType<typeof vi.fn>;
 let mockGetPackagesWithInfo: ReturnType<typeof vi.fn>;
 let mockComparePackages: ReturnType<typeof vi.fn>;
 let mockGenerateHtmlReport: ReturnType<typeof vi.fn>;
@@ -22,6 +22,7 @@ let mockGenerateSbom: ReturnType<typeof vi.fn>;
 let mockDetectDevPackages: ReturnType<typeof vi.fn>;
 let mockGetLatestVersions: ReturnType<typeof vi.fn>;
 let mockBuildDependencyGraph: ReturnType<typeof vi.fn>;
+let mockScanProject: ReturnType<typeof vi.fn>;
 let mockWriteFileSync: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -38,7 +39,7 @@ beforeEach(() => {
     mockMkdirSync = vi.fn();
     mockExistsSync = vi.fn().mockReturnValue(true);
     mockReadFileSync = vi.fn().mockReturnValue('');
-    mockGetPackages = vi.fn().mockReturnValue(new Map());
+    mockToVersionMap = vi.fn().mockReturnValue(new Map());
     mockGetPackagesWithInfo = vi.fn().mockReturnValue(new Map());
     mockComparePackages = vi.fn().mockReturnValue({ removed: [], added: [], updated: [] });
     mockGenerateHtmlReport = vi.fn().mockReturnValue('<html></html>');
@@ -46,6 +47,7 @@ beforeEach(() => {
     mockDetectDevPackages = vi.fn().mockReturnValue(new Set());
     mockGetLatestVersions = vi.fn().mockResolvedValue(new Map());
     mockBuildDependencyGraph = vi.fn().mockReturnValue('');
+    mockScanProject = vi.fn().mockReturnValue({ manifests: [], xcodeDevRefs: new Set(), xcodeAppRefs: new Set() });
     mockWriteFileSync = vi.fn();
     vi.resetModules();
 
@@ -75,14 +77,15 @@ beforeEach(() => {
     }));
 
     vi.doMock('../src/packages.js', () => ({
-        getPackages: mockGetPackages,
         getPackagesWithInfo: mockGetPackagesWithInfo,
+        toVersionMap: mockToVersionMap,
         comparePackages: mockComparePackages,
         generateHtmlReport: mockGenerateHtmlReport,
         generateSbom: mockGenerateSbom,
         detectDevPackages: mockDetectDevPackages,
         getLatestVersions: mockGetLatestVersions,
-        buildDependencyGraph: mockBuildDependencyGraph
+        buildDependencyGraph: mockBuildDependencyGraph,
+        scanProject: mockScanProject
     }));
 
     mockGetInput.mockImplementation((name: string) => {
@@ -157,6 +160,17 @@ describe('main', () => {
         expect(mockRenameSync).not.toHaveBeenCalled();
     });
 
+    test('parses each Package.resolved exactly once', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockGetPackagesWithInfo).toHaveBeenCalledTimes(2);
+        expect(mockGetPackagesWithInfo).toHaveBeenCalledWith(expect.stringContaining('CurrentPackage.resolved'));
+        expect(mockGetPackagesWithInfo).toHaveBeenCalledWith(
+            'MyApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved'
+        );
+    });
+
     test('creates tempDir before xcodebuild', async () => {
         const run = await loadRun();
         await run();
@@ -189,7 +203,7 @@ describe('main', () => {
     test('removed package → dependenciesChanged true, summary contains removed', async () => {
         const before = new Map([['firebase', '11.0.0']]);
         const after = new Map<string, string>();
-        mockGetPackages.mockReturnValueOnce(before).mockReturnValueOnce(after);
+        mockToVersionMap.mockReturnValueOnce(before).mockReturnValueOnce(after);
         mockComparePackages.mockReturnValue({ removed: ['firebase'], added: [], updated: [] });
 
         const run = await loadRun();
@@ -202,7 +216,7 @@ describe('main', () => {
     test('added package → dependenciesChanged true, summary contains added', async () => {
         const before = new Map<string, string>();
         const after = new Map([['jwt', '3.0.0']]);
-        mockGetPackages.mockReturnValueOnce(before).mockReturnValueOnce(after);
+        mockToVersionMap.mockReturnValueOnce(before).mockReturnValueOnce(after);
         mockComparePackages.mockReturnValue({ removed: [], added: ['jwt'], updated: [] });
 
         const run = await loadRun();
@@ -215,7 +229,7 @@ describe('main', () => {
     test('updated package → dependenciesChanged true, summary contains updated', async () => {
         const before = new Map([['firebase', '11.0.0']]);
         const after = new Map([['firebase', '11.1.0']]);
-        mockGetPackages.mockReturnValueOnce(before).mockReturnValueOnce(after);
+        mockToVersionMap.mockReturnValueOnce(before).mockReturnValueOnce(after);
         mockComparePackages.mockReturnValue({ removed: [], added: [], updated: ['firebase'] });
 
         const run = await loadRun();
@@ -234,7 +248,7 @@ describe('main', () => {
             ['firebase', '11.1.0'],
             ['new-pkg', '1.0.0']
         ]);
-        mockGetPackages.mockReturnValueOnce(before).mockReturnValueOnce(after);
+        mockToVersionMap.mockReturnValueOnce(before).mockReturnValueOnce(after);
         mockComparePackages.mockReturnValue({ removed: ['jwt'], added: ['new-pkg'], updated: ['firebase'] });
 
         const run = await loadRun();
@@ -526,9 +540,8 @@ describe('html report generation', () => {
 
         expect(mockBuildDependencyGraph).toHaveBeenCalledWith(
             expect.any(Map),
-            expect.any(String),
-            expect.stringContaining('checkouts'),
-            '.spm-tmp'
+            mockScanProject.mock.results[0].value,
+            expect.stringContaining('checkouts')
         );
         expect(mockGenerateHtmlReport.mock.calls[0][5]).toBe('flowchart TD\n  n0["firebase"]');
     });
@@ -687,6 +700,54 @@ describe('dev package auto-detection', () => {
 
         expect(mockGenerateHtmlReport.mock.calls[0][3]).toBe(detected);
     });
+
+    test('passes the resolved identities from the parsed Package.resolved to detectDevPackages', async () => {
+        mockGetPackagesWithInfo.mockReturnValue(new Map([['pactswift', { version: '1.0.0', url: '' }]]));
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'sbom_path') return 'sbom.json';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockDetectDevPackages).toHaveBeenCalledWith(
+            new Set(['pactswift']),
+            mockScanProject.mock.results[0].value
+        );
+    });
+
+    test('scans the project tree once when both dev detection and the dependency graph need it', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'html_report_path') return 'deps.html';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockScanProject).toHaveBeenCalledTimes(1);
+        expect(mockScanProject).toHaveBeenCalledWith(expect.any(String), '.spm-tmp');
+    });
+
+    test('does not scan the project when development_packages is given and only the SBOM is requested', async () => {
+        mockGetInput.mockImplementation((name: string) => {
+            if (name === 'project_file') return 'MyApp.xcodeproj';
+            if (name === 'temporary_packages_dir_path') return '.spm-tmp';
+            if (name === 'sbom_path') return 'sbom.json';
+            if (name === 'development_packages') return 'pactswift';
+            return '';
+        });
+
+        const run = await loadRun();
+        await run();
+
+        expect(mockScanProject).not.toHaveBeenCalled();
+    });
 });
 
 describe('dev package auto-detection with workspace', () => {
@@ -700,15 +761,12 @@ describe('dev package auto-detection with workspace', () => {
         });
     });
 
-    test('calls detectDevPackages with workspace directory as project root', async () => {
+    test('scans the workspace directory as project root for dev-package detection', async () => {
         const run = await loadRun();
         await run();
 
-        expect(mockDetectDevPackages).toHaveBeenCalledWith(
-            expect.any(String),
-            expect.stringContaining('path/to'),
-            '.spm-tmp'
-        );
+        expect(mockScanProject).toHaveBeenCalledWith(expect.stringContaining('path/to'), '.spm-tmp');
+        expect(mockDetectDevPackages).toHaveBeenCalledWith(expect.any(Set), mockScanProject.mock.results[0].value);
     });
 
     test('does not call detectDevPackages when development_packages is provided', async () => {

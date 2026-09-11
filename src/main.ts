@@ -4,15 +4,17 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
-    getPackages,
     getPackagesWithInfo,
+    toVersionMap,
     comparePackages,
     generateHtmlReport,
     generateSbom,
     detectDevPackages,
     getLatestVersions,
     buildDependencyGraph,
-    type PackageInfo
+    scanProject,
+    type PackageInfo,
+    type ProjectScan
 } from './packages.js';
 
 function findSharedScheme(workspaceFile: string, scheme: string): string | null {
@@ -95,15 +97,12 @@ export async function run(): Promise<void> {
         core.warning('scheme input is ignored when project_file is used without workspace_file.');
     }
 
-    if (workspaceFile && scheme) {
-        const schemePath = findSharedScheme(workspaceFile, scheme);
-        if (!schemePath) {
-            throw new Error(
-                `Scheme "${scheme}" was not found in "${workspaceFile}" or any referenced project. ` +
-                    `Make sure the scheme exists and is marked as shared in Xcode ` +
-                    `(Product → Scheme → Manage Schemes → check "Shared").`
-            );
-        }
+    if (workspaceFile && !findSharedScheme(workspaceFile, scheme)) {
+        throw new Error(
+            `Scheme "${scheme}" was not found in "${workspaceFile}" or any referenced project. ` +
+                `Make sure the scheme exists and is marked as shared in Xcode ` +
+                `(Product → Scheme → Manage Schemes → check "Shared").`
+        );
     }
 
     const packageResolved = workspaceFile
@@ -126,7 +125,7 @@ export async function run(): Promise<void> {
     // newer compatible versions when there is no existing lockfile to satisfy, so this is what
     // makes -resolvePackageDependencies actually surface available updates. If xcodebuild never
     // gets to rewrite packageResolved (crash, error), the post step restores this snapshot back
-    // to packageResolvedPath instead of leaving the workspace with a missing file.
+    // to packageResolved instead of leaving the workspace with a missing file.
     const hadExistingResolved = fs.existsSync(packageResolved);
     if (hadExistingResolved) {
         fs.renameSync(packageResolved, currentPackage);
@@ -144,18 +143,23 @@ export async function run(): Promise<void> {
 
     await exec.exec('xcodebuild', xcodebuildArgs);
 
-    const before = hadExistingResolved ? getPackages(currentPackage) : new Map<string, string>();
-    const after = getPackages(packageResolved);
-    const { removed, added, updated } = comparePackages(before, after);
+    const beforeInfo = hadExistingResolved ? getPackagesWithInfo(currentPackage) : new Map<string, PackageInfo>();
+    const afterInfo = getPackagesWithInfo(packageResolved);
+    const before = toVersionMap(beforeInfo);
+    const after = toVersionMap(afterInfo);
+    const diff = comparePackages(before, after);
+    const { removed, added, updated } = diff;
 
     if (htmlReportPath || sbomPath) {
-        const projectRoot = path.resolve(projectFile ? path.dirname(projectFile) : path.dirname(workspaceFile));
+        const projectRoot = path.resolve(path.dirname(projectFile || workspaceFile));
+        // Walked lazily and at most once: dev-package detection and the dependency graph share it,
+        // and neither needs it when development_packages is given and only the SBOM is requested.
+        let scan: ProjectScan | undefined;
+        const getScan = (): ProjectScan => (scan ??= scanProject(projectRoot, tempDir));
+
         const devPackages = devPackagesInput
             ? parseDevPackages(devPackagesInput)
-            : detectDevPackages(packageResolved, projectRoot, tempDir);
-
-        const beforeInfo = hadExistingResolved ? getPackagesWithInfo(currentPackage) : new Map<string, PackageInfo>();
-        const afterInfo = getPackagesWithInfo(packageResolved);
+            : detectDevPackages(new Set(afterInfo.keys()), getScan());
 
         if (htmlReportPath) {
             const runGit = async (command: string, args: string[]): Promise<string> => {
@@ -167,15 +171,8 @@ export async function run(): Promise<void> {
                 return stdout;
             };
             const latest = await getLatestVersions(afterInfo, runGit);
-            const mermaid = buildDependencyGraph(afterInfo, projectRoot, path.join(tempDir, 'checkouts'), tempDir);
-            const html = generateHtmlReport(
-                beforeInfo,
-                afterInfo,
-                { removed, added, updated },
-                devPackages,
-                latest,
-                mermaid
-            );
+            const mermaid = buildDependencyGraph(afterInfo, getScan(), path.join(tempDir, 'checkouts'));
+            const html = generateHtmlReport(beforeInfo, afterInfo, diff, devPackages, latest, mermaid);
             writeToPath(htmlReportPath, html);
             core.setOutput('html_report_path', htmlReportPath);
             core.info(`HTML dependency report written to ${htmlReportPath}`);
