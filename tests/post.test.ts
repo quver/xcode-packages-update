@@ -60,6 +60,46 @@ describe('post', () => {
         expect(mockRmSync).not.toHaveBeenCalled();
     });
 
+    test('restores the snapshot when temporary path validation fails and Package.resolved is missing', async () => {
+        mockGetState.mockImplementation((key: string) => {
+            if (key === 'temp_dir') return '.spm-tmp';
+            if (key === 'current_package') return '/tmp/CurrentPackage.resolved';
+            if (key === 'package_resolved_path') return 'MyApp.xcodeproj/.../Package.resolved';
+            return '';
+        });
+        mockExistsSync.mockImplementation((p: string) => p === '/tmp/CurrentPackage.resolved');
+        mockResolveSafeTempDir.mockImplementation(() => {
+            throw new Error('temporary path escaped the workspace');
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow('temporary path escaped the workspace');
+
+        expect(mockRenameSync).toHaveBeenCalledWith(
+            '/tmp/CurrentPackage.resolved',
+            'MyApp.xcodeproj/.../Package.resolved'
+        );
+        expect(mockRmSync).not.toHaveBeenCalled();
+    });
+
+    test('keeps a regenerated Package.resolved when temporary path validation fails', async () => {
+        mockGetState.mockImplementation((key: string) => {
+            if (key === 'temp_dir') return '.spm-tmp';
+            if (key === 'current_package') return '/tmp/CurrentPackage.resolved';
+            if (key === 'package_resolved_path') return 'MyApp.xcodeproj/.../Package.resolved';
+            return '';
+        });
+        mockResolveSafeTempDir.mockImplementation(() => {
+            throw new Error('temporary path escaped the workspace');
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow('temporary path escaped the workspace');
+
+        expect(mockRenameSync).not.toHaveBeenCalled();
+        expect(mockRmSync).toHaveBeenCalledExactlyOnceWith('/tmp/CurrentPackage.resolved', { force: true });
+    });
+
     test('deletes the snapshot when packageResolvedPath already exists (successful resolve)', async () => {
         mockGetState.mockImplementation((key: string) =>
             key === 'current_package' ? '/tmp/CurrentPackage.resolved' : ''
