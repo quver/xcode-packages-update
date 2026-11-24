@@ -6,6 +6,7 @@ let mockSetFailed: ReturnType<typeof vi.fn>;
 let mockRmSync: ReturnType<typeof vi.fn>;
 let mockRenameSync: ReturnType<typeof vi.fn>;
 let mockExistsSync: ReturnType<typeof vi.fn>;
+let mockResolveSafeTempDir: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
     mockGetState = vi.fn().mockReturnValue('');
@@ -13,6 +14,7 @@ beforeEach(() => {
     mockRmSync = vi.fn();
     mockRenameSync = vi.fn();
     mockExistsSync = vi.fn().mockReturnValue(true);
+    mockResolveSafeTempDir = vi.fn((tempDir: string) => tempDir);
     vi.resetModules();
 
     vi.doMock('@actions/core', () => ({
@@ -27,6 +29,8 @@ beforeEach(() => {
             existsSync: mockExistsSync
         }
     }));
+
+    vi.doMock('../src/temp-dir.js', () => ({ resolveSafeTempDir: mockResolveSafeTempDir }));
 });
 
 async function loadRun(): Promise<typeof RunFn> {
@@ -42,6 +46,58 @@ describe('post', () => {
         await run();
 
         expect(mockRmSync).toHaveBeenCalledWith('.spm-tmp', { recursive: true, force: true });
+        expect(mockResolveSafeTempDir).toHaveBeenCalledWith('.spm-tmp');
+    });
+
+    test('does not delete a temporary path that becomes unsafe before post cleanup', async () => {
+        mockGetState.mockImplementation((key: string) => (key === 'temp_dir' ? '.spm-tmp' : ''));
+        mockResolveSafeTempDir.mockImplementation(() => {
+            throw new Error('temporary path escaped the workspace');
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow('temporary path escaped the workspace');
+        expect(mockRmSync).not.toHaveBeenCalled();
+    });
+
+    test('restores the snapshot when temporary path validation fails and Package.resolved is missing', async () => {
+        mockGetState.mockImplementation((key: string) => {
+            if (key === 'temp_dir') return '.spm-tmp';
+            if (key === 'current_package') return '/tmp/CurrentPackage.resolved';
+            if (key === 'package_resolved_path') return 'MyApp.xcodeproj/.../Package.resolved';
+            return '';
+        });
+        mockExistsSync.mockImplementation((p: string) => p === '/tmp/CurrentPackage.resolved');
+        mockResolveSafeTempDir.mockImplementation(() => {
+            throw new Error('temporary path escaped the workspace');
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow('temporary path escaped the workspace');
+
+        expect(mockRenameSync).toHaveBeenCalledWith(
+            '/tmp/CurrentPackage.resolved',
+            'MyApp.xcodeproj/.../Package.resolved'
+        );
+        expect(mockRmSync).not.toHaveBeenCalled();
+    });
+
+    test('keeps a regenerated Package.resolved when temporary path validation fails', async () => {
+        mockGetState.mockImplementation((key: string) => {
+            if (key === 'temp_dir') return '.spm-tmp';
+            if (key === 'current_package') return '/tmp/CurrentPackage.resolved';
+            if (key === 'package_resolved_path') return 'MyApp.xcodeproj/.../Package.resolved';
+            return '';
+        });
+        mockResolveSafeTempDir.mockImplementation(() => {
+            throw new Error('temporary path escaped the workspace');
+        });
+
+        const run = await loadRun();
+        await expect(run()).rejects.toThrow('temporary path escaped the workspace');
+
+        expect(mockRenameSync).not.toHaveBeenCalled();
+        expect(mockRmSync).toHaveBeenCalledExactlyOnceWith('/tmp/CurrentPackage.resolved', { force: true });
     });
 
     test('deletes the snapshot when packageResolvedPath already exists (successful resolve)', async () => {

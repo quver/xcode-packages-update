@@ -3,6 +3,7 @@ import * as exec from '@actions/exec';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { resolveSafeTempDir } from './temp-dir.js';
 import {
     getPackagesWithInfo,
     toVersionMap,
@@ -55,21 +56,6 @@ function writeToPath(filePath: string, content: string): void {
     fs.writeFileSync(filePath, content, 'utf8');
 }
 
-/** Guards against temporary_packages_dir_path pointing outside the workspace before it is recursively deleted. */
-function assertSafeTempDir(tempDir: string): void {
-    const resolved = path.resolve(tempDir);
-    const cwd = process.cwd();
-    const relative = path.relative(cwd, resolved);
-    const escapesWorkspace = relative === '' || relative.startsWith('..') || path.isAbsolute(relative);
-
-    if (escapesWorkspace) {
-        throw new Error(
-            `temporary_packages_dir_path ("${tempDir}") must resolve to a subdirectory inside the workspace, ` +
-                `not "${resolved}".`
-        );
-    }
-}
-
 export async function run(): Promise<void> {
     const projectFile = core.getInput('project_file');
     const workspaceFile = core.getInput('workspace_file');
@@ -114,10 +100,10 @@ export async function run(): Promise<void> {
     const snapshotDir = process.env.RUNNER_TEMP || os.tmpdir();
     const currentPackage = path.join(snapshotDir, 'CurrentPackage.resolved');
 
-    assertSafeTempDir(tempDir);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    const safeTempDir = resolveSafeTempDir(tempDir);
+    fs.rmSync(safeTempDir, { recursive: true, force: true });
 
-    core.saveState('temp_dir', tempDir);
+    core.saveState('temp_dir', safeTempDir);
     core.saveState('current_package', currentPackage);
     core.saveState('package_resolved_path', packageResolved);
 
@@ -131,14 +117,14 @@ export async function run(): Promise<void> {
         fs.renameSync(packageResolved, currentPackage);
     }
 
-    fs.mkdirSync(tempDir, { recursive: true });
+    fs.mkdirSync(safeTempDir, { recursive: true });
 
     const xcodebuildArgs = [
         ...(workspaceFile ? ['-workspace', workspaceFile, '-scheme', scheme] : ['-project', projectFile]),
         '-resolvePackageDependencies',
         '-disablePackageRepositoryCache',
         '-clonedSourcePackagesDirPath',
-        tempDir
+        safeTempDir
     ];
 
     await exec.exec('xcodebuild', xcodebuildArgs);
@@ -155,7 +141,7 @@ export async function run(): Promise<void> {
         // Walked lazily and at most once: dev-package detection and the dependency graph share it,
         // and neither needs it when development_packages is given and only the SBOM is requested.
         let scan: ProjectScan | undefined;
-        const getScan = (): ProjectScan => (scan ??= scanProject(projectRoot, tempDir));
+        const getScan = (): ProjectScan => (scan ??= scanProject(projectRoot, safeTempDir));
 
         const devPackages = devPackagesInput
             ? parseDevPackages(devPackagesInput)
@@ -171,7 +157,7 @@ export async function run(): Promise<void> {
                 return stdout;
             };
             const latest = await getLatestVersions(afterInfo, runGit);
-            const mermaid = buildDependencyGraph(afterInfo, getScan(), path.join(tempDir, 'checkouts'));
+            const mermaid = buildDependencyGraph(afterInfo, getScan(), path.join(safeTempDir, 'checkouts'));
             const html = generateHtmlReport(beforeInfo, afterInfo, diff, devPackages, latest, mermaid);
             writeToPath(htmlReportPath, html);
             core.setOutput('html_report_path', htmlReportPath);
@@ -186,7 +172,7 @@ export async function run(): Promise<void> {
         }
     }
 
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(resolveSafeTempDir(safeTempDir), { recursive: true, force: true });
     fs.rmSync(currentPackage, { force: true });
 
     if (removed.length === 0 && added.length === 0 && updated.length === 0) {

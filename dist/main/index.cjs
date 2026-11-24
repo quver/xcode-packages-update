@@ -1068,14 +1068,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol || ""}//${url.hostname || ""}:${port}`;
-        let path6 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path7 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin[origin.length - 1] === "/") {
           origin = origin.slice(0, origin.length - 1);
         }
-        if (path6 && path6[0] !== "/") {
-          path6 = `/${path6}`;
+        if (path7 && path7[0] !== "/") {
+          path7 = `/${path7}`;
         }
-        return new URL(`${origin}${path6}`);
+        return new URL(`${origin}${path7}`);
       }
       if (!isHttpOrHttpsPrefixed(url.origin || url.protocol)) {
         throw new InvalidArgumentError("Invalid URL protocol: the URL must start with `http:` or `https:`.");
@@ -1526,39 +1526,39 @@ var require_diagnostics = __commonJS({
       });
       diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
         const {
-          request: { method, path: path6, origin }
+          request: { method, path: path7, origin }
         } = evt;
-        debuglog("sending request to %s %s/%s", method, origin, path6);
+        debuglog("sending request to %s %s/%s", method, origin, path7);
       });
       diagnosticsChannel.channel("undici:request:headers").subscribe((evt) => {
         const {
-          request: { method, path: path6, origin },
+          request: { method, path: path7, origin },
           response: { statusCode }
         } = evt;
         debuglog(
           "received response to %s %s/%s - HTTP %d",
           method,
           origin,
-          path6,
+          path7,
           statusCode
         );
       });
       diagnosticsChannel.channel("undici:request:trailers").subscribe((evt) => {
         const {
-          request: { method, path: path6, origin }
+          request: { method, path: path7, origin }
         } = evt;
-        debuglog("trailers received from %s %s/%s", method, origin, path6);
+        debuglog("trailers received from %s %s/%s", method, origin, path7);
       });
       diagnosticsChannel.channel("undici:request:error").subscribe((evt) => {
         const {
-          request: { method, path: path6, origin },
+          request: { method, path: path7, origin },
           error: error2
         } = evt;
         debuglog(
           "request to %s %s/%s errored - %s",
           method,
           origin,
-          path6,
+          path7,
           error2.message
         );
       });
@@ -1607,9 +1607,9 @@ var require_diagnostics = __commonJS({
         });
         diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
           const {
-            request: { method, path: path6, origin }
+            request: { method, path: path7, origin }
           } = evt;
-          debuglog("sending request to %s %s/%s", method, origin, path6);
+          debuglog("sending request to %s %s/%s", method, origin, path7);
         });
       }
       diagnosticsChannel.channel("undici:websocket:open").subscribe((evt) => {
@@ -1672,7 +1672,7 @@ var require_request = __commonJS({
     var kHandler = /* @__PURE__ */ Symbol("handler");
     var Request = class {
       constructor(origin, {
-        path: path6,
+        path: path7,
         method,
         body,
         headers,
@@ -1687,11 +1687,11 @@ var require_request = __commonJS({
         expectContinue,
         servername
       }, handler) {
-        if (typeof path6 !== "string") {
+        if (typeof path7 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path6[0] !== "/" && !(path6.startsWith("http://") || path6.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path7[0] !== "/" && !(path7.startsWith("http://") || path7.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.test(path6)) {
+        } else if (invalidPathRegex.test(path7)) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -1757,7 +1757,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? buildURL(path6, query) : path6;
+        this.path = query ? buildURL(path7, query) : path7;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -6450,7 +6450,7 @@ var require_client_h1 = __commonJS({
       return method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE" && method !== "CONNECT";
     }
     function writeH1(client, request) {
-      const { method, path: path6, host, upgrade, blocking, reset } = request;
+      const { method, path: path7, host, upgrade, blocking, reset } = request;
       let { body, headers, contentLength } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       if (util.isFormDataLike(body)) {
@@ -6531,7 +6531,7 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path6} HTTP/1.1\r
+      let header = `${method} ${path7} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -7060,7 +7060,7 @@ var require_client_h2 = __commonJS({
     }
     function writeH2(client, request) {
       const session = client[kHTTP2Session];
-      const { method, path: path6, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { method, path: path7, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let { body } = request;
       if (upgrade) {
         util.errorRequest(client, request, new Error("Upgrade not supported for H2"));
@@ -7157,7 +7157,7 @@ var require_client_h2 = __commonJS({
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path6;
+      headers[HTTP2_HEADER_PATH] = path7;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -7510,9 +7510,9 @@ var require_redirect_handler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path6 = search ? `${pathname}${search}` : pathname;
+        const path7 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path6;
+        this.opts.path = path7;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -8751,10 +8751,10 @@ var require_proxy_agent = __commonJS({
         };
         const {
           origin,
-          path: path6 = "/",
+          path: path7 = "/",
           headers = {}
         } = opts;
-        opts.path = origin + path6;
+        opts.path = origin + path7;
         if (!("host" in headers) && !("Host" in headers)) {
           const { host } = new URL2(origin);
           headers.host = host;
@@ -10726,20 +10726,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path6) {
-      if (typeof path6 !== "string") {
-        return path6;
+    function safeUrl(path7) {
+      if (typeof path7 !== "string") {
+        return path7;
       }
-      const pathSegments = path6.split("?");
+      const pathSegments = path7.split("?");
       if (pathSegments.length !== 2) {
-        return path6;
+        return path7;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path6, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path6);
+    function matchKey(mockDispatch2, { path: path7, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path7);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -10761,7 +10761,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path6 }) => matchValue(safeUrl(path6), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path7 }) => matchValue(safeUrl(path7), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -10799,9 +10799,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path6, method, body, headers, query } = opts;
+      const { path: path7, method, body, headers, query } = opts;
       return {
-        path: path6,
+        path: path7,
         method,
         body,
         headers,
@@ -11264,10 +11264,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path6, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path7, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path6,
+            Path: path7,
             "Status code": statusCode,
             Persistent: persist ? PERSISTENT : NOT_PERSISTENT,
             Invocations: timesInvoked,
@@ -16146,9 +16146,9 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path6) {
-      for (let i = 0; i < path6.length; ++i) {
-        const code = path6.charCodeAt(i);
+    function validateCookiePath(path7) {
+      for (let i = 0; i < path7.length; ++i) {
+        const code = path7.charCodeAt(i);
         if (code < 32 || // exclude CTLs (0-31)
         code > 126 || // exclude DEL and non-ascii
         code === 59) {
@@ -19068,11 +19068,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path6 = opts.path;
+          let path7 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path6 = `/${path6}`;
+            path7 = `/${path7}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path6);
+          url = new URL(util.parseOrigin(url).origin + path7);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -20387,16 +20387,45 @@ function saveState(name, value) {
 }
 
 // src/main.ts
-var import_fs3 = __toESM(require("fs"), 1);
+var import_fs4 = __toESM(require("fs"), 1);
 var import_os3 = __toESM(require("os"), 1);
-var import_path2 = __toESM(require("path"), 1);
+var import_path3 = __toESM(require("path"), 1);
 
-// src/packages.ts
+// src/temp-dir.ts
 var import_fs2 = __toESM(require("fs"), 1);
 var import_path = __toESM(require("path"), 1);
+function resolveSafeTempDir(tempDir, workspaceDir = process.cwd()) {
+  const workspacePath = import_path.default.resolve(workspaceDir);
+  const workspaceRealPath = import_fs2.default.realpathSync(workspacePath);
+  const resolved = import_path.default.resolve(workspacePath, tempDir);
+  const insideWorkspace = (candidate, root) => {
+    const relative2 = import_path.default.relative(root, candidate);
+    return relative2 !== "" && relative2 !== ".." && !relative2.startsWith(`..${import_path.default.sep}`) && !import_path.default.isAbsolute(relative2);
+  };
+  const unsafePath = () => new Error(`temporary_packages_dir_path ("${tempDir}") must resolve to a subdirectory inside the workspace.`);
+  if (!insideWorkspace(resolved, workspacePath)) throw unsafePath();
+  let existing = resolved;
+  while (true) {
+    try {
+      const entry = import_fs2.default.lstatSync(existing);
+      if (existing === resolved && entry.isSymbolicLink()) existing = import_path.default.dirname(existing);
+      break;
+    } catch (error2) {
+      if (error2.code !== "ENOENT") throw error2;
+      existing = import_path.default.dirname(existing);
+    }
+  }
+  const realPath = import_path.default.resolve(import_fs2.default.realpathSync(existing), import_path.default.relative(existing, resolved));
+  if (!insideWorkspace(realPath, workspaceRealPath)) throw unsafePath();
+  return realPath;
+}
+
+// src/packages.ts
+var import_fs3 = __toESM(require("fs"), 1);
+var import_path2 = __toESM(require("path"), 1);
 var import_crypto = require("crypto");
 function parseResolved(filePath) {
-  const content = import_fs2.default.readFileSync(filePath, "utf8");
+  const content = import_fs3.default.readFileSync(filePath, "utf8");
   const parsed = JSON.parse(content);
   if ("object" in parsed) {
     const pins = parsed.object?.pins;
@@ -20506,19 +20535,19 @@ function comparePackages(before, after) {
 }
 var EXCLUDE_DIRS = /* @__PURE__ */ new Set([".build", "node_modules", ".git", "DerivedData", ".spm-tmp", ".swiftpm"]);
 function walkDirs(rootDir, excludeDir, visit) {
-  const resolvedExclude = excludeDir ? import_path.default.resolve(excludeDir) : void 0;
+  const resolvedExclude = excludeDir ? import_path2.default.resolve(excludeDir) : void 0;
   function scan(dir) {
-    if (resolvedExclude && import_path.default.resolve(dir) === resolvedExclude) return;
+    if (resolvedExclude && import_path2.default.resolve(dir) === resolvedExclude) return;
     let entries;
     try {
-      entries = import_fs2.default.readdirSync(dir, { withFileTypes: true });
+      entries = import_fs3.default.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
     visit(dir, entries);
     for (const entry of entries) {
       if (entry.isDirectory() && !EXCLUDE_DIRS.has(entry.name)) {
-        scan(import_path.default.join(dir, entry.name));
+        scan(import_path2.default.join(dir, entry.name));
       }
     }
   }
@@ -20526,7 +20555,7 @@ function walkDirs(rootDir, excludeDir, visit) {
 }
 function readTextOrNull(filePath) {
   try {
-    return import_fs2.default.readFileSync(filePath, "utf8");
+    return import_fs3.default.readFileSync(filePath, "utf8");
   } catch {
     return null;
   }
@@ -20639,11 +20668,11 @@ function scanProject(projectRoot, excludeDir) {
   walkDirs(projectRoot, excludeDir, (dir, entries) => {
     for (const entry of entries) {
       if (entry.isFile() && entry.name === "Package.swift") {
-        const content = readTextOrNull(import_path.default.join(dir, entry.name));
+        const content = readTextOrNull(import_path2.default.join(dir, entry.name));
         if (content !== null) scan.manifests.push(content);
       } else if (entry.isDirectory() && entry.name.endsWith(".xcodeproj")) {
-        const pbxprojPath = import_path.default.join(dir, entry.name, "project.pbxproj");
-        if (!import_fs2.default.existsSync(pbxprojPath)) continue;
+        const pbxprojPath = import_path2.default.join(dir, entry.name, "project.pbxproj");
+        if (!import_fs3.default.existsSync(pbxprojPath)) continue;
         const { devRefs, appRefs } = detectXcodeDevPackages(pbxprojPath);
         for (const ref of devRefs) scan.xcodeDevRefs.add(ref);
         for (const ref of appRefs) scan.xcodeAppRefs.add(ref);
@@ -20687,7 +20716,7 @@ function getDependencyEdges(checkoutsDir, resolvedSet) {
   const edges = /* @__PURE__ */ new Map();
   let entries;
   try {
-    entries = import_fs2.default.readdirSync(checkoutsDir, { withFileTypes: true });
+    entries = import_fs3.default.readdirSync(checkoutsDir, { withFileTypes: true });
   } catch {
     return edges;
   }
@@ -20695,7 +20724,7 @@ function getDependencyEdges(checkoutsDir, resolvedSet) {
     if (!entry.isDirectory()) continue;
     const identity = entry.name.toLowerCase();
     if (!resolvedSet.has(identity)) continue;
-    const content = readTextOrNull(import_path.default.join(checkoutsDir, entry.name, "Package.swift"));
+    const content = readTextOrNull(import_path2.default.join(checkoutsDir, entry.name, "Package.swift"));
     if (content === null) continue;
     const children = [...new Set(manifestPackageDeps(content))].filter(
       (child2) => child2 !== identity && resolvedSet.has(child2)
@@ -20915,15 +20944,15 @@ function generateSbom(afterInfo, devPackages = /* @__PURE__ */ new Set()) {
 // src/main.ts
 function findSharedScheme(workspaceFile, scheme) {
   const schemeFilename = `${scheme}.xcscheme`;
-  const workspaceSchemePath = import_path2.default.join(workspaceFile, "xcshareddata", "xcschemes", schemeFilename);
-  if (import_fs3.default.existsSync(workspaceSchemePath)) return workspaceSchemePath;
-  const contentsPath = import_path2.default.join(workspaceFile, "contents.xcworkspacedata");
-  if (!import_fs3.default.existsSync(contentsPath)) return null;
-  const contents = import_fs3.default.readFileSync(contentsPath, "utf8");
-  const workspaceDir = import_path2.default.dirname(workspaceFile);
+  const workspaceSchemePath = import_path3.default.join(workspaceFile, "xcshareddata", "xcschemes", schemeFilename);
+  if (import_fs4.default.existsSync(workspaceSchemePath)) return workspaceSchemePath;
+  const contentsPath = import_path3.default.join(workspaceFile, "contents.xcworkspacedata");
+  if (!import_fs4.default.existsSync(contentsPath)) return null;
+  const contents = import_fs4.default.readFileSync(contentsPath, "utf8");
+  const workspaceDir = import_path3.default.dirname(workspaceFile);
   for (const [, ref] of contents.matchAll(/location\s*=\s*"(?:container|group):([^"]+)"/g)) {
-    const projectSchemePath = import_path2.default.join(workspaceDir, ref, "xcshareddata", "xcschemes", schemeFilename);
-    if (import_fs3.default.existsSync(projectSchemePath)) return projectSchemePath;
+    const projectSchemePath = import_path3.default.join(workspaceDir, ref, "xcshareddata", "xcschemes", schemeFilename);
+    if (import_fs4.default.existsSync(projectSchemePath)) return projectSchemePath;
   }
   return null;
 }
@@ -20933,20 +20962,9 @@ function parseDevPackages(input) {
   );
 }
 function writeToPath(filePath, content) {
-  const dir = import_path2.default.dirname(import_path2.default.resolve(filePath));
-  import_fs3.default.mkdirSync(dir, { recursive: true });
-  import_fs3.default.writeFileSync(filePath, content, "utf8");
-}
-function assertSafeTempDir(tempDir) {
-  const resolved = import_path2.default.resolve(tempDir);
-  const cwd = process.cwd();
-  const relative2 = import_path2.default.relative(cwd, resolved);
-  const escapesWorkspace = relative2 === "" || relative2.startsWith("..") || import_path2.default.isAbsolute(relative2);
-  if (escapesWorkspace) {
-    throw new Error(
-      `temporary_packages_dir_path ("${tempDir}") must resolve to a subdirectory inside the workspace, not "${resolved}".`
-    );
-  }
+  const dir = import_path3.default.dirname(import_path3.default.resolve(filePath));
+  import_fs4.default.mkdirSync(dir, { recursive: true });
+  import_fs4.default.writeFileSync(filePath, content, "utf8");
 }
 async function run() {
   const projectFile = getInput("project_file");
@@ -20977,23 +20995,23 @@ async function run() {
   }
   const packageResolved = workspaceFile ? `${workspaceFile}/xcshareddata/swiftpm/Package.resolved` : `${projectFile}/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`;
   const snapshotDir = process.env.RUNNER_TEMP || import_os3.default.tmpdir();
-  const currentPackage = import_path2.default.join(snapshotDir, "CurrentPackage.resolved");
-  assertSafeTempDir(tempDir);
-  import_fs3.default.rmSync(tempDir, { recursive: true, force: true });
-  saveState("temp_dir", tempDir);
+  const currentPackage = import_path3.default.join(snapshotDir, "CurrentPackage.resolved");
+  const safeTempDir = resolveSafeTempDir(tempDir);
+  import_fs4.default.rmSync(safeTempDir, { recursive: true, force: true });
+  saveState("temp_dir", safeTempDir);
   saveState("current_package", currentPackage);
   saveState("package_resolved_path", packageResolved);
-  const hadExistingResolved = import_fs3.default.existsSync(packageResolved);
+  const hadExistingResolved = import_fs4.default.existsSync(packageResolved);
   if (hadExistingResolved) {
-    import_fs3.default.renameSync(packageResolved, currentPackage);
+    import_fs4.default.renameSync(packageResolved, currentPackage);
   }
-  import_fs3.default.mkdirSync(tempDir, { recursive: true });
+  import_fs4.default.mkdirSync(safeTempDir, { recursive: true });
   const xcodebuildArgs = [
     ...workspaceFile ? ["-workspace", workspaceFile, "-scheme", scheme] : ["-project", projectFile],
     "-resolvePackageDependencies",
     "-disablePackageRepositoryCache",
     "-clonedSourcePackagesDirPath",
-    tempDir
+    safeTempDir
   ];
   await exec("xcodebuild", xcodebuildArgs);
   const beforeInfo = hadExistingResolved ? getPackagesWithInfo(currentPackage) : /* @__PURE__ */ new Map();
@@ -21003,9 +21021,9 @@ async function run() {
   const diff = comparePackages(before, after);
   const { removed, added, updated } = diff;
   if (htmlReportPath || sbomPath) {
-    const projectRoot = import_path2.default.resolve(import_path2.default.dirname(projectFile || workspaceFile));
+    const projectRoot = import_path3.default.resolve(import_path3.default.dirname(projectFile || workspaceFile));
     let scan;
-    const getScan = () => scan ??= scanProject(projectRoot, tempDir);
+    const getScan = () => scan ??= scanProject(projectRoot, safeTempDir);
     const devPackages = devPackagesInput ? parseDevPackages(devPackagesInput) : detectDevPackages(new Set(afterInfo.keys()), getScan());
     if (htmlReportPath) {
       const runGit = async (command, args) => {
@@ -21017,7 +21035,7 @@ async function run() {
         return stdout;
       };
       const latest = await getLatestVersions(afterInfo, runGit);
-      const mermaid = buildDependencyGraph(afterInfo, getScan(), import_path2.default.join(tempDir, "checkouts"));
+      const mermaid = buildDependencyGraph(afterInfo, getScan(), import_path3.default.join(safeTempDir, "checkouts"));
       const html = generateHtmlReport(beforeInfo, afterInfo, diff, devPackages, latest, mermaid);
       writeToPath(htmlReportPath, html);
       setOutput("html_report_path", htmlReportPath);
@@ -21030,8 +21048,8 @@ async function run() {
       info(`CycloneDX SBOM written to ${sbomPath}`);
     }
   }
-  import_fs3.default.rmSync(tempDir, { recursive: true, force: true });
-  import_fs3.default.rmSync(currentPackage, { force: true });
+  import_fs4.default.rmSync(resolveSafeTempDir(safeTempDir), { recursive: true, force: true });
+  import_fs4.default.rmSync(currentPackage, { force: true });
   if (removed.length === 0 && added.length === 0 && updated.length === 0) {
     info("Dependencies up to date");
     setOutput("dependenciesChanged", "false");
