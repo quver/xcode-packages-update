@@ -59,4 +59,10 @@ describe('resolveSafeTempDir', () => {
             'must resolve to a subdirectory inside the workspace'
         );
     });
+
+    test('propagates errors other than a missing path before deletion', () => {
+        fs.writeFileSync(path.join(workspace, 'file'), 'not a directory');
+
+        expect(() => resolveSafeTempDir('file/checkouts', workspace)).toThrow(/ENOTDIR/);
+    });
 });

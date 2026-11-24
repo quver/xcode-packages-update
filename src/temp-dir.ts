@@ -31,9 +31,7 @@ export function resolveSafeTempDir(tempDir: string, workspaceDir = process.cwd()
             break;
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-            const parent = path.dirname(existing);
-            if (parent === existing) throw error;
-            existing = parent;
+            existing = path.dirname(existing);
         }
     }
 

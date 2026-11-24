@@ -20412,9 +20412,7 @@ function resolveSafeTempDir(tempDir, workspaceDir = process.cwd()) {
       break;
     } catch (error2) {
       if (error2.code !== "ENOENT") throw error2;
-      const parent = import_path.default.dirname(existing);
-      if (parent === existing) throw error2;
-      existing = parent;
+      existing = import_path.default.dirname(existing);
     }
   }
   const realPath = import_path.default.resolve(import_fs2.default.realpathSync(existing), import_path.default.relative(existing, resolved));
