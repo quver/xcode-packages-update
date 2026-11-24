@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import fs from 'fs';
+import { resolveSafeTempDir } from './temp-dir.js';
 
 export async function run(): Promise<void> {
     const tempDir = core.getState('temp_dir');
@@ -7,7 +8,7 @@ export async function run(): Promise<void> {
     const packageResolvedPath = core.getState('package_resolved_path');
 
     if (tempDir) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
+        fs.rmSync(resolveSafeTempDir(tempDir), { recursive: true, force: true });
     }
 
     if (currentPackage && fs.existsSync(currentPackage)) {

@@ -13,11 +13,13 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
     steps:
       - name: Validate version format
         run: |
-          if ! echo "${{ inputs.version }}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Invalid version format: '${{ inputs.version }}'. Expected A.B.C (e.g. 1.2.3)"
+          if ! [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version format. Expected A.B.C (e.g. 1.2.3)"
             exit 1
           fi
 
@@ -42,7 +44,7 @@ jobs:
       - run: npm test
 
       - name: Bump version in package.json
-        run: npm version ${{ inputs.version }} --no-git-tag-version
+        run: npm version "$RELEASE_VERSION" --no-git-tag-version
 
       # Runs after the version bump so the SBOM tool version (injected via esbuild --define
       # from $npm_package_version) and the built dist/ reflect the version being released.
@@ -52,14 +54,14 @@ jobs:
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
-          git checkout -b release/v${{ inputs.version }}
+          git checkout -b "release/v${RELEASE_VERSION}"
           git add dist/ package.json package-lock.json
-          git commit -m "release: v${{ inputs.version }}"
-          git push origin release/v${{ inputs.version }}
+          git commit -m "release: v${RELEASE_VERSION}"
+          git push origin "release/v${RELEASE_VERSION}"
           gh pr create \
-            --title "release: v${{ inputs.version }}" \
-            --body "Automated release PR for v${{ inputs.version }}. Merge to publish." \
+            --title "release: v${RELEASE_VERSION}" \
+            --body "Automated release PR for v${RELEASE_VERSION}. Merge to publish." \
             --base main \
-            --head release/v${{ inputs.version }}
+            --head "release/v${RELEASE_VERSION}"
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

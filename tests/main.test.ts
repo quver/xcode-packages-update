@@ -24,6 +24,7 @@ let mockGetLatestVersions: ReturnType<typeof vi.fn>;
 let mockBuildDependencyGraph: ReturnType<typeof vi.fn>;
 let mockScanProject: ReturnType<typeof vi.fn>;
 let mockWriteFileSync: ReturnType<typeof vi.fn>;
+let mockResolveSafeTempDir: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
     mockGetInput = vi.fn();
@@ -49,6 +50,7 @@ beforeEach(() => {
     mockBuildDependencyGraph = vi.fn().mockReturnValue('');
     mockScanProject = vi.fn().mockReturnValue({ manifests: [], xcodeDevRefs: new Set(), xcodeAppRefs: new Set() });
     mockWriteFileSync = vi.fn();
+    mockResolveSafeTempDir = vi.fn((tempDir: string) => tempDir);
     vi.resetModules();
 
     vi.doMock('@actions/core', () => ({
@@ -87,6 +89,8 @@ beforeEach(() => {
         buildDependencyGraph: mockBuildDependencyGraph,
         scanProject: mockScanProject
     }));
+
+    vi.doMock('../src/temp-dir.js', () => ({ resolveSafeTempDir: mockResolveSafeTempDir }));
 
     mockGetInput.mockImplementation((name: string) => {
         if (name === 'project_file') return 'MyApp.xcodeproj';
@@ -268,6 +272,9 @@ describe('main', () => {
     });
 
     test('temporary_packages_dir_path resolving outside the workspace → throws before deleting anything', async () => {
+        mockResolveSafeTempDir.mockImplementation(() => {
+            throw new Error('temporary_packages_dir_path must resolve to a subdirectory inside the workspace');
+        });
         mockGetInput.mockImplementation((name: string) => {
             if (name === 'project_file') return 'MyApp.xcodeproj';
             if (name === 'temporary_packages_dir_path') return '..';
@@ -277,6 +284,14 @@ describe('main', () => {
         const run = await loadRun();
         await expect(run()).rejects.toThrow('must resolve to a subdirectory inside the workspace');
         expect(mockRmSync).not.toHaveBeenCalled();
+    });
+
+    test('revalidates the temporary path before final cleanup', async () => {
+        const run = await loadRun();
+        await run();
+
+        expect(mockResolveSafeTempDir).toHaveBeenCalledTimes(2);
+        expect(mockResolveSafeTempDir).toHaveBeenNthCalledWith(2, '.spm-tmp');
     });
 });
 
